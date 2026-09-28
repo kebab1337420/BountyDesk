@@ -1,3 +1,4 @@
+import { isIP } from 'node:net'
 import type { ScanDepth, ScopeDomain } from '../../../shared/ipc'
 
 export const SCAN_DEPTHS: ScanDepth[] = ['low', 'med', 'high']
@@ -13,9 +14,39 @@ export interface ScanPlan {
   rateLimit: number
   targets: string[]
   steps: ScanStep[]
+  userAgent: string
+  requestHeader?: string
+}
+
+export const MAX_TARGETS = 200
+
+function isPrivateHost(host: string): boolean {
+  const h = host.toLowerCase()
+  if (h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.internal')) return true
+  if (isIP(h) === 0) return false
+  if (h.includes(':')) {
+    const c = h.toLowerCase()
+    return c === '::1' || c.startsWith('fc') || c.startsWith('fd') || c.startsWith('fe80')
+  }
+  const parts = h.split('.').map((x) => Number(x))
+  const a = parts[0] ?? 0
+  const b = parts[1] ?? 0
+  return (
+    a === 10 ||
+    a === 127 ||
+    a === 0 ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    (a === 169 && b === 254)
+  )
 }
 
 const UA = 'BountyDesk-scan/1.0'
+
+export interface PlanOptions {
+  userAgent?: string | null
+  requestHeader?: string | null
+}
 
 export function selectTargets(scope: ScopeDomain[]): string[] {
   const seen = new Set<string>()
@@ -33,6 +64,7 @@ export function selectTargets(scope: ScopeDomain[]): string[] {
       continue
     }
     if (u.protocol !== 'http:' && u.protocol !== 'https:') continue
+    if (isPrivateHost(u.hostname)) continue
     const norm = u.origin + u.pathname.replace(/\/+$/, '')
     if (seen.has(norm)) continue
     seen.add(norm)
@@ -41,13 +73,16 @@ export function selectTargets(scope: ScopeDomain[]): string[] {
   return out
 }
 
-export function buildPlan(depth: ScanDepth, targets: string[], rateLimit: number): ScanPlan {
+export function buildPlan(depth: ScanDepth, targets: string[], rateLimit: number, opts?: PlanOptions): ScanPlan {
   const steps: ScanStep[] = []
+  const ua = opts?.userAgent?.trim() || UA
+  const hdr = opts?.requestHeader?.trim() || undefined
+  const headerArgs = hdr ? ['-H', hdr] : []
   for (const t of targets) {
     if (depth === 'low' || depth === 'med' || depth === 'high') {
       steps.push({
         tool: 'curl',
-        args: ['-s', '-I', '--max-time', '15', '-A', UA, t],
+        args: ['-s', '-I', '--max-time', '15', '-A', ua, ...headerArgs, t],
         hint: `en-têtes HTTP ${t}`,
       })
     }
@@ -72,5 +107,5 @@ export function buildPlan(depth: ScanDepth, targets: string[], rateLimit: number
       })
     }
   }
-  return { depth, rateLimit, targets, steps }
+  return { depth, rateLimit, targets, steps, userAgent: ua, requestHeader: hdr }
 }

@@ -15,7 +15,27 @@ export function portableExePath(id: string): string {
   return join(toolsDir(), id, `${id}.exe`)
 }
 
+const GITHUB_ASSET_HOSTS = new Set([
+  'github.com',
+  'objects.githubusercontent.com',
+  'release-assets.githubusercontent.com',
+  'github-releases.githubusercontent.com',
+])
+
+function assertGithubAssetUrl(raw: string): void {
+  let u: URL
+  try {
+    u = new URL(raw)
+  } catch {
+    throw new Error(`URL d'asset invalide`)
+  }
+  if (u.protocol !== 'https:' || !GITHUB_ASSET_HOSTS.has(u.hostname)) {
+    throw new Error(`Hôte d'asset non autorisé : ${u.hostname}`)
+  }
+}
+
 export function resolveBinary(tool: string): string | null {
+  if (!/^[a-z0-9][a-z0-9._-]{0,59}$/i.test(tool) || !getTool(tool)) return null
   const exe = portableExePath(tool)
   return existsSync(exe) ? exe : null
 }
@@ -40,7 +60,7 @@ const MARKER = '.bountydesk-installed'
 
 function run(cmd: string, args: string[], onOutput?: (line: string) => void): Promise<number> {
   return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { windowsHide: true, shell: false })
+    const child = spawn(cmd, args, { windowsHide: true, shell: false, cwd: toolsDir() })
     child.stdout?.on('data', (b: Buffer) => onOutput?.(b.toString()))
     child.stderr?.on('data', (b: Buffer) => onOutput?.(b.toString()))
     child.on('error', reject)
@@ -88,6 +108,7 @@ export async function currentTools(): Promise<ToolEntry[]> {
 async function downloadToFile(url: string, dest: string): Promise<void> {
   const res = await fetch(url, { headers: { 'User-Agent': 'BountyDesk/0.1' } })
   if (!res.ok) throw new Error(`Téléchargement refusé (HTTP ${res.status})`)
+  assertGithubAssetUrl(res.url || url)
   const buf = Buffer.from(await res.arrayBuffer())
   writeFileSync(dest, buf)
 }
@@ -99,12 +120,21 @@ async function installGithub(tool: ToolDefinition, onOutput: (line: string) => v
   })
   if (!release.ok) throw new Error(`Impossible de lire les releases GitHub (HTTP ${release.status})`)
   const body = (await release.json()) as { tag_name?: string; assets?: { name: string; browser_download_url: string }[] }
-  const asset = body.assets?.find((a) => a.name.toLowerCase().includes(tool.githubAsset!.toLowerCase()) && a.name.match(/\.(zip|tar\.gz|tgz)$/i))
-  if (!asset) throw new Error(`Aucun asset windows trouvé pour ${tool.githubRepo}`)
+  const want = tool.githubAsset!.toLowerCase()
+  const extOk = /\.(zip|tar\.gz|tgz)$/i
+  const matches = (body.assets ?? [])
+    .filter((a) => a.name.toLowerCase().includes(want) && extOk.test(a.name))
+    .map((a) => a.browser_download_url)
+  if (matches.length === 0) throw new Error(`Aucun asset windows trouvé pour ${tool.githubRepo}`)
+  if (matches.length > 1) {
+    throw new Error(`Asset windows ambigu pour ${tool.githubRepo} (${matches.length} candidats) — configurez githubAsset plus précisément`)
+  }
+  assertGithubAssetUrl(matches[0]!)
+  const assetUrl = matches[0]!
 
   const zipPath = join(toolsDir(), `${tool.id}.download`)
-  onOutput(`Téléchargement de ${asset.name}…`)
-  await downloadToFile(asset.browser_download_url, zipPath)
+  onOutput(`Téléchargement de ${tool.id}…`)
+  await downloadToFile(assetUrl, zipPath)
   onOutput('Extraction…')
   const workDir = join(toolsDir(), `${tool.id}.tmp`)
   rmSync(workDir, { recursive: true, force: true })

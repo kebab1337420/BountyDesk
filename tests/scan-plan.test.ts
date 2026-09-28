@@ -30,6 +30,43 @@ describe('selectTargets', () => {
   it('renvoie une liste vide quand il n’y a aucune cible valide', () => {
     expect(selectTargets([d({ endpoint: 'https://x.example.com', inScope: false })])).toEqual([])
   })
+
+  it('écarte les hôtes privés/loopback (garde réseau interne)', () => {
+    const scope: ScopeDomain[] = [
+      d({ endpoint: 'http://127.0.0.1/' }),
+      d({ endpoint: 'https://10.0.0.5/admin' }),
+      d({ endpoint: 'https://192.168.1.10/x' }),
+      d({ endpoint: 'http://localhost/' }),
+      d({ endpoint: 'https://172.16.4.9/' }),
+      d({ endpoint: 'https://169.254.169.254/meta' }),
+      d({ endpoint: 'https://scan.example.com/' }),
+    ]
+    const targets = selectTargets(scope)
+    expect(targets).toEqual(['https://scan.example.com'])
+  })
+
+  it('applique le user-agent et le header de requête des ROE au plan', () => {
+    const plan = buildPlan('med', ['https://a.example.com'], 5, {
+      userAgent: 'BotDE/1.0',
+      requestHeader: 'X-Bounty-Desk: 1',
+    })
+    expect(plan.userAgent).toBe('BotDE/1.0')
+    expect(plan.requestHeader).toBe('X-Bounty-Desk: 1')
+    const curl = plan.steps[0]!
+    expect(curl.args).toContain('-A')
+    expect(curl.args).toContain('BotDE/1.0')
+    expect(curl.args).toContain('-H')
+    expect(curl.args).toContain('X-Bounty-Desk: 1')
+  })
+
+  it('garde le user-agent par défaut si les ROE n’en imposent pas', () => {
+    const plan = buildPlan('low', ['https://a.example.com'], 1)
+    expect(plan.userAgent).toBe('BountyDesk-scan/1.0')
+    const curl = plan.steps[0]!
+    expect(curl.args).toContain('-A')
+    expect(curl.args).toContain('BountyDesk-scan/1.0')
+    expect(curl.args).not.toContain('-H')
+  })
 })
 
 describe('buildPlan', () => {

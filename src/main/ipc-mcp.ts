@@ -172,8 +172,10 @@ export function restoreAutostartMcp(): void {
   const cfg = loadMcpConfig()
   if (cfg.enabled && cfg.tokens.length > 0 && cfg.port) {
     const primary = cfg.tokens[0]!.token
+    // Ne jamais re-brancher 0.0.0.0 silencieusement au démarrage (réseau public/hotspot) :
+    // redémarrer en local uniquement, l'utilisateur réactivera le LAN explicitement.
     void startMcpServer(cfg.port, primary, {
-      lan: cfg.lan,
+      lan: false,
       tokens: cfg.tokens.map((t) => t.token),
       tokenLabels: withLabels(cfg.tokens),
     })

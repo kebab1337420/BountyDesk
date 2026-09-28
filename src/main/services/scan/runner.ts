@@ -13,6 +13,22 @@ export function getRunner(scanId: number): ScanRunner | undefined {
   return runners.get(scanId)
 }
 
+export function activeScanCount(): number {
+  let n = 0
+  for (const r of runners.values()) if (!r.isStopped()) n += 1
+  return n
+}
+
+export function activeScanForProgram(programId: string): ScanRunner | undefined {
+  const repo = getRepository()
+  for (const [scanId, r] of runners) {
+    if (r.isStopped()) continue
+    const scan = repo.getScan(scanId)
+    if (scan && scan.program_id === programId) return r
+  }
+  return undefined
+}
+
 export function requestStop(scanId: number): boolean {
   const r = runners.get(scanId)
   if (!r) return false

@@ -438,15 +438,25 @@ export class Repository {
   }
 
   updateCredential(id: number, patch: { label?: string; username?: string; secretEnc?: string; note?: string }): void {
-    const label = patch.label ?? ''
-    const username = patch.username ?? ''
-    const secretEnc = patch.secretEnc ?? ''
-    const note = patch.note ?? ''
+    const sets: string[] = []
+    const vals: string[] = []
+    const cols: [keyof typeof patch, string][] = [
+      ['label', 'label'],
+      ['username', 'username'],
+      ['secretEnc', 'secret_enc'],
+      ['note', 'note'],
+    ]
+    for (const [key, col] of cols) {
+      const val = patch[key]
+      if (val !== undefined) {
+        sets.push(`${col} = ?`)
+        vals.push(val as string)
+      }
+    }
+    if (sets.length === 0) throw new Error('Aucun champ à mettre à jour')
     const info = this.db
-      .prepare(
-        'UPDATE credentials SET label = ?, username = ?, secret_enc = ?, note = ?, updated_at = ? WHERE id = ?',
-      )
-      .run(label, username, secretEnc, note, Date.now(), id)
+      .prepare(`UPDATE credentials SET ${sets.join(', ')}, updated_at = ? WHERE id = ?`)
+      .run(...vals, Date.now(), id)
     if (Number(info.changes) === 0) throw new Error(`Identifiant introuvable (id=${id})`)
   }
 

@@ -2,14 +2,16 @@ import { createServer, type IncomingMessage, type ServerResponse } from 'node:ht
 import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { networkInterfaces } from 'node:os'
+import { statSync } from 'node:fs'
+import { resolve } from 'node:path'
 import type { McpStatusInfo, ScanDepth } from '../../../shared/ipc'
 import { getClient } from '../../app-state'
 import { getRepository } from '../../db'
 import { fetchProgramDetail, getCachedProgramDetail } from '../program-detail'
-import { buildPlan, selectTargets } from '../scan/plan'
-import { startScan } from '../scan/runner'
+import { buildPlan, selectTargets, MAX_TARGETS } from '../scan/plan'
+import { activeScanCount, activeScanForProgram, startScan } from '../scan/runner'
 import { getTool, TOOL_CATALOG } from '../tools/catalog'
-import { currentTools, installTool, resolveBinary } from '../tools/installer'
+import { currentTools, installTool, resolveBinary, toolsDir } from '../tools/installer'
 
 const PROTOCOL_VERSION = '2024-11-05'
 const MAX_BODY = 1024 * 1024
@@ -46,18 +48,34 @@ function splitArgs(str: string): string[] {
   return str.match(/(?:[^\s"]+|"[^"]*")+/g)?.map((t) => t.replace(/^"|"$/g, '')) ?? []
 }
 
+const DENY_TOOLS = new Set([
+  'cmd', 'powershell', 'pwsh', 'mshta', 'rundll32', 'regsvr32', 'certutil',
+  'bitsadmin', 'wscript', 'cscript', 'winget',
+])
+const SAFE_TOOLS = new Set([
+  'node', 'python', 'python3', 'pip', 'git', 'tar', 'curl', 'wget', 'jq', 'rg', 'yq', 'go',
+])
+
+function isAllowedRunTool(tool: string): boolean {
+  const name = tool.toLowerCase().replace(/\.exe$/i, '')
+  if (DENY_TOOLS.has(name)) return false
+  if (SAFE_TOOLS.has(name)) return true
+  return getTool(tool) !== undefined
+}
+
 const runToolDef: McpToolDef = {
   name: 'run_tool',
   description:
     'Exécute un binaire du catalogue BountyDesk (portable dans %APPDATA%\\BountyDesk\\tools ou binaire PATH comme'
-    + ' nmap/ffuf). Arguments libres en une chaîne, cwd optionnel, timeout par défaut 120 s. Toute invocation est'
-    + ' journalisée (Activité des IA). À n’utiliser que sur des cibles autorisées, dans le scope et selon les ROE.',
+    + ' nmap/ffuf) ou un binaire système de confiance (node, python, git, tar, curl, jq, rg, yq, go). Arguments libres'
+    + ' en une chaîne, cwd optionnel (doit être sous le dossier tools de BountyDesk), timeout par défaut 120 s. Toute'
+    + ' invocation est journalisée (Activité des IA). À n’utiliser que sur des cibles autorisées, dans le scope et selon les ROE.',
   inputSchema: {
     type: 'object',
     properties: {
-      tool: { ...STR, description: 'id du catalogue (voir list_tools) ou nom de binaire' },
+      tool: { ...STR, description: 'id du catalogue (voir list_tools) ou binaire système de confiance' },
       args: { type: 'string', description: 'arguments de ligne de commande, une seule chaîne (guillemets double pour grouper)' },
-      cwd: { type: 'string', description: 'répertoire de travail absolu (optionnel, doit exister)' },
+      cwd: { type: 'string', description: 'répertoire de travail absolu sous le dossier tools (optionnel)' },
       timeout: { type: 'integer', minimum: 1, maximum: 600, description: 'secondes, défaut 120' },
     },
     required: ['tool'],
@@ -66,16 +84,37 @@ const runToolDef: McpToolDef = {
     const tool = asString(args.tool, 60)
     if (!tool) return { text: 'tool requis (chaîne 1-60)', isError: true }
     if (!/^[a-z0-9][a-z0-9._-]*$/i.test(tool)) return { text: `Nom de binaire invalide : ${tool}`, isError: true }
+    if (!isAllowedRunTool(tool)) {
+      return { text: `Outil bloqué : ${tool} (hors catalogue et hors liste système de confiance)`, isError: true }
+    }
     const argStr = typeof args.args === 'string' ? args.args.slice(0, 8000) : ''
     const timeout = asInt(args.timeout, 1, 600) ?? 120
-    const cwd = asString(args.cwd, 400)
+    const toolsRoot = toolsDir()
+    const rawCwd = asString(args.cwd, 400)
+    let cwd = toolsRoot
+    if (rawCwd) {
+      const abs = resolve(rawCwd)
+      const lower = abs.toLowerCase()
+      if (lower.startsWith('\\\\') || lower.startsWith('//')) {
+        return { text: 'Chemin réseau (UNC) refusé', isError: true }
+      }
+      try {
+        if (!statSync(abs).isDirectory()) return { text: 'cwd invalide : pas un répertoire', isError: true }
+      } catch {
+        return { text: 'cwd invalide : n’existe pas', isError: true }
+      }
+      if (!lower.startsWith(toolsRoot.toLowerCase())) {
+        return { text: 'cwd hors périmètre autorisé (dossier tools BountyDesk)', isError: true }
+      }
+      cwd = abs
+    }
     const bin = resolveBinary(tool) ?? tool
     const argv = splitArgs(argStr)
 
     return await new Promise<ToolResult>((resolveRes) => {
       let child: ReturnType<typeof spawn>
       try {
-        child = spawn(bin, argv, { windowsHide: true, shell: false, cwd: cwd ?? undefined })
+        child = spawn(bin, argv, { windowsHide: true, shell: false, cwd })
       } catch (err) {
         resolveRes({ text: `Impossible de lancer ${tool} : ${err instanceof Error ? err.message : String(err)}`, isError: true })
         return
@@ -241,11 +280,30 @@ const TOOL_DEFS: McpToolDef[] = [
           detail = getCachedProgramDetail(programId)
         }
         if (!detail) return { text: 'Détail du programme indisponible', isError: true }
+        const MAX_SCOPE_AGE_MS = 24 * 3600 * 1000
+        if (Date.now() - detail.fetchedAt > MAX_SCOPE_AGE_MS) {
+          return { text: 'Scope expiré : resynchronisez le programme (jeton requis) avant tout scan', isError: true }
+        }
+        if (detail.roe && detail.roe.automatedTooling === 0) {
+          return { text: 'Les règles d’engagement interdisent les outils automatisés pour ce programme', isError: true }
+        }
+        if (activeScanForProgram(programId)) {
+          return { text: 'Un scan est déjà en cours pour ce programme', isError: true }
+        }
+        if (activeScanCount() >= 2) {
+          return { text: 'Trop de scans simultanés (max 2)', isError: true }
+        }
         const targets = selectTargets(detail.scope)
         if (targets.length === 0) return { text: 'Aucune cible in-scope exploitable (http(s))', isError: true }
+        if (targets.length > MAX_TARGETS) {
+          return { text: `Scope trop large (${targets.length} cibles, max ${MAX_TARGETS}) — affinez le programme`, isError: true }
+        }
         const rate = rateLimit ?? DEFAULT_RATE[depth]
         const scanId = repo.createScan({ programId, depth, rateLimit: rate, roeConfirm })
-        const plan = buildPlan(depth, targets, rate)
+        const plan = buildPlan(depth, targets, rate, {
+          userAgent: detail.roe?.userAgent,
+          requestHeader: detail.roe?.requestHeader,
+        })
         void startScan(scanId, plan)
         return { text: JSON.stringify({ ok: true, scanId, targets: targets.length, depth, rateLimit: rate }, null, 2) }
       } catch (err) {

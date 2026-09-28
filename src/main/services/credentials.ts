@@ -3,26 +3,20 @@ import { getRepository } from '../db'
 import type { CredentialInput, CredentialRecord } from '../../shared/ipc'
 
 function encrypt(secret: string): string {
-  if (safeStorage.isEncryptionAvailable()) {
-    return 'enc:' + safeStorage.encryptString(secret).toString('base64')
+  if (!safeStorage.isEncryptionAvailable()) {
+    throw new Error('Chiffrement safeStorage indisponible : refus d’enregistrer le secret en clair')
   }
-  return 'b64:' + Buffer.from(secret, 'utf8').toString('base64')
+  return 'enc:' + safeStorage.encryptString(secret).toString('base64')
 }
 
 function decrypt(enc: string): string {
-  if (!enc) return ''
-  if (enc.startsWith('enc:')) {
-    if (!safeStorage.isEncryptionAvailable()) return ''
-    try {
-      return safeStorage.decryptString(Buffer.from(enc.slice(4), 'base64'))
-    } catch {
-      return ''
-    }
+  if (!enc || !enc.startsWith('enc:')) return ''
+  if (!safeStorage.isEncryptionAvailable()) return ''
+  try {
+    return safeStorage.decryptString(Buffer.from(enc.slice(4), 'base64'))
+  } catch {
+    return ''
   }
-  if (enc.startsWith('b64:')) {
-    return Buffer.from(enc.slice(4), 'base64').toString('utf8')
-  }
-  return ''
 }
 
 export function listCredentials(programId: string): CredentialRecord[] {

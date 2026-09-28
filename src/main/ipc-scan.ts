@@ -4,13 +4,15 @@ import { IPC, type ScanDepth } from '../shared/ipc'
 import { getRepository } from './db'
 import { getClient } from './app-state'
 import { fetchProgramDetail, getCachedProgramDetail } from './services/program-detail'
-import { buildPlan, selectTargets, SCAN_DEPTHS } from './services/scan/plan'
-import { requestStop, startScan } from './services/scan/runner'
+import { buildPlan, selectTargets, SCAN_DEPTHS, MAX_TARGETS } from './services/scan/plan'
+import { activeScanCount, activeScanForProgram, requestStop, startScan } from './services/scan/runner'
 
 const programIdSchema = z.string().min(1).max(200)
 const scanIdSchema = z.number().int().positive()
 
 const DEFAULT_RATE: Record<ScanDepth, number> = { low: 1, med: 5, high: 10 }
+
+const MAX_SCOPE_AGE_MS = 24 * 3600 * 1000
 
 const dbResultError = (err: unknown): { ok: false; error: string } => ({
   ok: false,
@@ -40,13 +42,31 @@ export function registerScanIpc(): void {
         detail = getCachedProgramDetail(programId)
       }
       if (!detail) return { ok: false, error: 'Détail du programme indisponible' } as const
+      if (Date.now() - detail.fetchedAt > MAX_SCOPE_AGE_MS) {
+        return { ok: false, error: 'Scope expiré : resynchronisez le programme (jeton requis) avant tout scan' } as const
+      }
+      if (detail.roe && detail.roe.automatedTooling === 0) {
+        return { ok: false, error: 'Les règles d’engagement interdisent les outils automatisés pour ce programme' } as const
+      }
+      if (activeScanForProgram(programId)) {
+        return { ok: false, error: 'Un scan est déjà en cours pour ce programme' } as const
+      }
+      if (activeScanCount() >= 2) {
+        return { ok: false, error: 'Trop de scans simultanés (max 2)' } as const
+      }
 
       const targets = selectTargets(detail.scope)
       if (targets.length === 0) return { ok: false, error: 'Aucune cible in-scope exploitable (http(s))' } as const
+      if (targets.length > MAX_TARGETS) {
+        return { ok: false, error: `Scope trop large (${targets.length} cibles, max ${MAX_TARGETS}) — affinez le programme` } as const
+      }
 
       const rate = rateLimit ?? DEFAULT_RATE[depth]
       const scanId = repo.createScan({ programId, depth, rateLimit: rate, roeConfirm })
-      const plan = buildPlan(depth, targets, rate)
+      const plan = buildPlan(depth, targets, rate, {
+        userAgent: detail.roe?.userAgent,
+        requestHeader: detail.roe?.requestHeader,
+      })
 
       void startScan(scanId, plan)
       return { ok: true, scanId } as const

@@ -20,6 +20,7 @@ vi.mock('../src/main/services/tools/installer', () => ({
   installTool: async (id: string) => ({ ok: true as const, installed: true }),
   resolveBinary: () => null,
   resolveWordlist: () => null,
+  toolsDir: () => userData,
 }))
 
 import { closeDb, getRepository } from '../src/main/db'
@@ -133,6 +134,33 @@ describe('serveur MCP (HTTP réel)', () => {
     })
     const json = (await res.json()) as { result: { content: { text: string }[]; isError: boolean } }
     expect(json.result.isError).toBe(true)
+  })
+
+  it('run_tool refuse les interpréteurs de commande (allowline)', async () => {
+    for (const tool of ['powershell', 'cmd', 'mshta', 'run_tool']) {
+      const res = await rpc({
+        jsonrpc: '2.0', id: 1, method: 'tools/call',
+        params: { name: 'run_tool', arguments: { tool, args: '-enc dGVzdA==' } },
+      })
+      const json = (await res.json()) as { result: { content: { text: string }[]; isError: boolean } }
+      expect(json.result.isError).toBe(true)
+    }
+  })
+
+  it('run_tool refuse un cwd hors du dossier tools et les chemins réseau', async () => {
+    const res1 = await rpc({
+      jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name: 'run_tool', arguments: { tool: 'node', args: '-e "1"', cwd: 'C:\\Users\\Public' } },
+    })
+    const j1 = (await res1.json()) as { result: { content: { text: string }[]; isError: boolean } }
+    expect(j1.result.isError).toBe(true)
+
+    const res2 = await rpc({
+      jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name: 'run_tool', arguments: { tool: 'node', args: '-e "1"', cwd: '\\\\srv\\share' } },
+    })
+    const j2 = (await res2.json()) as { result: { content: { text: string }[]; isError: boolean } }
+    expect(j2.result.isError).toBe(true)
   })
 
   it('tools/call list_programs passe sur le vrai HTTP et lit la base réelle', async () => {
