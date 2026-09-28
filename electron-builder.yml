@@ -1,0 +1,29 @@
+appId: com.bountydesk.app
+productName: BountyDesk
+copyright: Copyright © 2026 whitehat
+
+directories:
+  buildResources: build
+  output: dist
+
+files:
+  - out/**
+  - package.json
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: BountyDesk
+  uninstallDisplayName: BountyDesk
+  artifactName: BountyDesk-Setup-${version}.${ext}
+
+npmRebuild: true

@@ -1,0 +1,101 @@
+import type { Domain, IntigritiClient, RulesVersion } from '../../services/intigriti'
+import { getRepository } from '../db'
+import type { ProgramDetailData, RoeInfo, ScopeDomain } from '../../shared/ipc'
+
+function toScopeDomain(d: Domain): ScopeDomain {
+  const type = d.type.value
+  return {
+    id: d.id,
+    type,
+    endpoint: d.endpoint,
+    tier: d.tier.value,
+    description: d.description,
+    inScope: /in[- ]?scope/i.test(type),
+  }
+}
+
+function toRoe(r: RulesVersion): RoeInfo {
+  const c = r.content
+  if (!c) {
+    return {
+      description: '',
+      intigritiMe: false,
+      automatedTooling: null,
+      userAgent: null,
+      requestHeader: null,
+      safeHarbour: false,
+      attachments: r.attachments ?? [],
+    }
+  }
+  const req = c.testingRequirements ?? {}
+  return {
+    description: c.description,
+    intigritiMe: req.intigritiMe ?? false,
+    automatedTooling: req.automatedTooling ?? null,
+    userAgent: req.userAgent ?? null,
+    requestHeader: req.requestHeader ?? null,
+    safeHarbour: c.safeHarbour,
+    attachments: r.attachments ?? [],
+  }
+}
+
+export async function fetchProgramDetail(client: IntigritiClient, programId: string): Promise<ProgramDetailData> {
+  const repo = getRepository()
+  const row = repo.getProgram(programId)
+
+  const detail = await client.getProgram(programId)
+  const domainsData = await client.getProgramDomains(programId, detail.domains.id)
+  const roeRules = detail.rulesOfEngagement ? await client.getProgramRules(programId, detail.rulesOfEngagement.id) : null
+
+  const scope = domainsData.domains.content?.map(toScopeDomain) ?? []
+  const roe = roeRules?.rulesOfEngagement ? toRoe(roeRules.rulesOfEngagement) : null
+  const fetchedAt = Date.now()
+
+  repo.setProgramDetail(programId, JSON.stringify(scope), roe ? JSON.stringify(roe) : null, fetchedAt)
+
+  return {
+    programId,
+    handle: detail.handle,
+    name: detail.name,
+    status: detail.status?.value ?? null,
+    type: detail.type?.value ?? null,
+    confidentiality: detail.confidentialityLevel?.value ?? null,
+    industry: detail.industry ?? null,
+    webLink: detail.webLinks?.detail ?? row?.webLink ?? null,
+    minBounty: row?.minBounty ?? null,
+    maxBounty: row?.maxBounty ?? null,
+    scope,
+    roe,
+    fetchedAt,
+  }
+}
+
+export function getCachedProgramDetail(programId: string): ProgramDetailData | null {
+  const repo = getRepository()
+  const row = repo.getProgramDetail(programId)
+  const prog = repo.getProgram(programId)
+  if (!row || !prog) return null
+  let scope: ScopeDomain[] = []
+  let roe: RoeInfo | null = null
+  try {
+    if (row.scopeJson) scope = JSON.parse(row.scopeJson) as ScopeDomain[]
+    if (row.roeJson) roe = JSON.parse(row.roeJson) as RoeInfo
+  } catch {
+    return null
+  }
+  return {
+    programId,
+    handle: prog.handle,
+    name: prog.name,
+    status: prog.status,
+    type: prog.type,
+    confidentiality: prog.confidentiality,
+    industry: prog.industry,
+    webLink: prog.webLink,
+    minBounty: prog.minBounty,
+    maxBounty: prog.maxBounty,
+    scope,
+    roe,
+    fetchedAt: row.fetchedAt,
+  }
+}

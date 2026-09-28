@@ -1,0 +1,35 @@
+import { DatabaseSync } from 'node:sqlite'
+import { migrations } from './migrations'
+
+export type Db = DatabaseSync
+
+export function openDatabase(path: string): Db {
+  const db = new DatabaseSync(path)
+  db.exec('PRAGMA journal_mode = WAL;')
+  db.exec('PRAGMA foreign_keys = ON;')
+  migrate(db)
+  return db
+}
+
+export function migrate(db: Db): void {
+  const row = db.prepare('SELECT user_version FROM pragma_user_version').get() as
+    | { user_version: number }
+    | undefined
+  const current = row?.user_version ?? 0
+  for (const m of migrations) {
+    if (m.version <= current) continue
+    begin(db)
+    try {
+      m.up(db)
+      db.exec(`PRAGMA user_version = ${m.version};`)
+      db.exec('COMMIT;')
+    } catch (err) {
+      db.exec('ROLLBACK;')
+      throw err
+    }
+  }
+}
+
+export function begin(db: Db): void {
+  db.exec('BEGIN;')
+}
