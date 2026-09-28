@@ -380,6 +380,21 @@ function localHosts(): string[] {
   return [...new Set(out)].sort()
 }
 
+export function isPrivateNetwork(): boolean {
+  for (const addrs of Object.values(networkInterfaces())) {
+    for (const a of addrs ?? []) {
+      if (a.family !== 'IPv4' || a.internal) continue
+      const parts = a.address.split('.')
+      const first = Number(parts[0] ?? 0)
+      const second = Number(parts[1] ?? 0)
+      if (first === 10) return true
+      if (first === 172 && second >= 16 && second <= 31) return true
+      if (first === 192 && second === 168) return true
+    }
+  }
+  return false
+}
+
 export function generateMcpToken(): string {
   return randomBytes(24).toString('base64url')
 }
