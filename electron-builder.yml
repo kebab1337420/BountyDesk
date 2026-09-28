@@ -25,5 +25,6 @@ nsis:
   shortcutName: BountyDesk
   uninstallDisplayName: BountyDesk
   artifactName: BountyDesk-Setup-${version}.${ext}
+  include: build/installer.nsh
 
 npmRebuild: true
