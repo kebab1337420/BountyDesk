@@ -16,6 +16,25 @@ win:
       arch:
         - x64
 
+linux:
+  target:
+    - target: AppImage
+      arch:
+        - x64
+    - target: deb
+      arch:
+        - x64
+  category: Development
+  synopsis: Bureau du chercheur Intigriti
+  description: BountyDesk - centralise vos programmes de bug bounty, vos scans de securite et vos agents IA.
+  desktop:
+    entry:
+      Name: BountyDesk
+      Comment: Bureau du chercheur Intigriti
+      Categories: Development;Security;
+      StartupWMClass: BountyDesk
+      MimeType: x-scheme-handler/bountydesk;
+
 nsis:
   oneClick: false
   perMachine: false
