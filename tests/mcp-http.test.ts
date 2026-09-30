@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -26,6 +26,23 @@ vi.mock('../src/main/services/tools/installer', () => ({
 import { closeDb, getRepository } from '../src/main/db'
 import { startMcpServer, stopMcpServer } from '../src/main/services/mcp/server'
 import type { ProgramInput } from '../src/main/db/repo'
+import { registerMcpIpc } from '../src/main/ipc-mcp'
+import { IPC } from '../src/shared/ipc'
+import { ipcMain } from 'electron'
+
+const ipcHandlers: Record<string, (...args: unknown[]) => Promise<unknown>> = {}
+
+function captureIpc(): void {
+  for (const [channel, handler] of vi.mocked(ipcMain.handle).mock.calls) {
+    ipcHandlers[channel as string] = handler as (...args: unknown[]) => Promise<unknown>
+  }
+}
+
+function ipcHandler(channel: string): (...args: unknown[]) => Promise<unknown> {
+  const handler = ipcHandlers[channel]
+  if (!handler) throw new Error(`IPCHandler ${channel} non enregistré`)
+  return handler
+}
 
 const TOKEN = 'test-token-http-1234567890'
 let port = 0
@@ -236,5 +253,69 @@ describe('serveur MCP (HTTP réel)', () => {
     expect(okRow).toBeTruthy()
     expect(okRow!.status).toBe('ok')
     expect(rows.find((x) => x.status === '401')).toBeTruthy()
+  })
+})
+
+describe('handlers IPC Santé & machines', () => {
+  beforeAll(() => {
+    registerMcpIpc()
+    captureIpc()
+  })
+
+  beforeEach(async () => {
+    closeDb()
+    rmSync(join(userData, 'bountydesk.db'), { force: true })
+    rmSync(join(userData, 'bountydesk.db-wal'), { force: true })
+    rmSync(join(userData, 'bountydesk.db-shm'), { force: true })
+    getRepository().upsertPrograms([
+      {
+        id: 'prog-1', handle: 'acme', name: 'Acme', type: 'bug_bounty', status: 'active',
+        confidentiality: 'public', minBounty: null, maxBounty: null, industry: null,
+        webLink: null, following: false, rawJson: null,
+      } as ProgramInput,
+    ])
+    const r = await startMcpServer(0, TOKEN)
+    if (!r.ok) throw new Error(r.error)
+    port = r.port
+  })
+
+  afterEach(() => {
+    stopMcpServer()
+  })
+
+  it('enregistre les trois nouveaux canaux IPC', () => {
+    expect(ipcHandler(IPC.McpDiagnose)).toBeTypeOf('function')
+    expect(ipcHandler(IPC.McpFirewallFix)).toBeTypeOf('function')
+    expect(ipcHandler(IPC.McpMachines)).toBeTypeOf('function')
+  })
+
+  it('diagnose : état réel, self-test HTTP, erreurs 401 récentes et état pare-feu', async () => {
+    await rpc({ jsonrpc: '2.0', id: 1, method: 'ping' }, {}, 'mauvais-jeton')
+    const res = await ipcHandler(IPC.McpDiagnose)()
+    expect(res).toBeTruthy()
+    const diag = res as { ok: true; diag: { running: boolean; port: number | null; lan: boolean; firewall: string; selfTest: { ok: boolean; ms: number; error?: string } | null; recentErrors: { status: string }[] } }
+    expect(diag.ok).toBe(true)
+    expect(diag.diag.running).toBe(true)
+    expect(diag.diag.port).toBe(port)
+    expect(['ok', 'missing', 'unmanaged']).toContain(diag.diag.firewall)
+    expect(diag.diag.selfTest?.ok).toBe(true)
+    expect(diag.diag.recentErrors.some((r) => r.status === '401')).toBe(true)
+  })
+
+  it('machines : agrège les appels par jeton avec IP sources', async () => {
+    await rpc(
+      { jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'list_programs', arguments: {} } },
+      {},
+      TOKEN
+    )
+    const res = await ipcHandler(IPC.McpMachines)(undefined, {})
+    expect(res).toBeTruthy()
+    const m = res as { ok: true; machines: { tokenLabel: string; lastSeen: string; calls: number; errors: number; ips: string[] }[] }
+    expect(m.ok).toBe(true)
+    const group = m.machines.find((x) => x.tokenLabel === 'PC 1')
+    expect(group).toBeTruthy()
+    expect(group!.calls).toBeGreaterThanOrEqual(1)
+    expect(group!.errors).toBe(0)
+    expect(group!.ips.length).toBeGreaterThanOrEqual(1)
   })
 })

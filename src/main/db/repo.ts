@@ -62,6 +62,28 @@ export interface McpRequestRow {
   args_json: string
   status: string
   ms: number
+  remote_ip: string
+}
+
+export interface McpMachineRow {
+  tokenLabel: string
+  lastSeen: number
+  calls: number
+  errors: number
+  ip: string | null
+}
+
+export interface RemoteSessionRow {
+  id: number
+  agent_token: string
+  agent_label: string
+  remote_ip: string
+  status: string
+  width: number | null
+  height: number | null
+  requested_at: number
+  decided_at: number | null
+  ended_at: number | null
 }
 
 export interface ProgramQuery {
@@ -511,16 +533,75 @@ export class Repository {
       .all(scanId, afterSeq, limit) as unknown as ScanEventRow[]
   }
 
-  appendMcpRequest(input: { ts: number; tokenLabel: string; tool: string; argsJson: string; status: string; ms: number }): void {
+  appendMcpRequest(input: { ts: number; tokenLabel: string; tool: string; argsJson: string; status: string; ms: number; remoteIp: string }): void {
     this.db
-      .prepare('INSERT INTO mcp_requests (ts, token_label, tool, args_json, status, ms) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(input.ts, input.tokenLabel, input.tool, input.argsJson, input.status, input.ms)
+      .prepare('INSERT INTO mcp_requests (ts, token_label, tool, args_json, status, ms, remote_ip) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(input.ts, input.tokenLabel, input.tool, input.argsJson, input.status, input.ms, input.remoteIp || '')
   }
 
   listMcpRequests(limit = 100): McpRequestRow[] {
     return this.db
       .prepare('SELECT * FROM mcp_requests ORDER BY id DESC LIMIT ?')
       .all(limit) as unknown as McpRequestRow[]
+  }
+
+  mcpMachines(limit = 50): McpMachineRow[] {
+    return this.db
+      .prepare(
+        `SELECT
+           token_label AS tokenLabel,
+           MAX(ts) AS lastSeen,
+           COUNT(*) AS calls,
+           SUM(CASE WHEN status IN ('error', '401') THEN 1 ELSE 0 END) AS errors,
+           GROUP_CONCAT(DISTINCT remote_ip) AS ip
+         FROM mcp_requests
+         WHERE token_label != ''
+         GROUP BY token_label
+         ORDER BY lastSeen DESC
+         LIMIT ?`
+      )
+      .all(limit) as unknown as McpMachineRow[]
+  }
+
+  createRemoteSession(input: { agentToken: string; agentLabel: string; remoteIp: string }): number {
+    const info = this.db
+      .prepare('INSERT INTO remote_sessions (agent_token, agent_label, remote_ip, status, requested_at) VALUES (?, ?, ?, ?, ?)')
+      .run(input.agentToken, input.agentLabel, input.remoteIp, 'pending', Date.now())
+    return Number(info.lastInsertRowid)
+  }
+
+  getRemoteSession(id: number): RemoteSessionRow | undefined {
+    return this.db.prepare('SELECT * FROM remote_sessions WHERE id = ?').get(id) as unknown as RemoteSessionRow | undefined
+  }
+
+  updateRemoteSession(
+    id: number,
+    patch: { status?: string; decidedAt?: number | null; endedAt?: number | null; width?: number | null; height?: number | null }
+  ): void {
+    const sets: string[] = []
+    const vals: Array<string | number | null> = []
+    const cols: [keyof typeof patch, string][] = [
+      ['status', 'status'],
+      ['decidedAt', 'decided_at'],
+      ['endedAt', 'ended_at'],
+      ['width', 'width'],
+      ['height', 'height'],
+    ]
+    for (const [key, col] of cols) {
+      const val = patch[key]
+      if (val !== undefined) {
+        sets.push(`${col} = ?`)
+        vals.push(val as string | number | null)
+      }
+    }
+    if (sets.length === 0) throw new Error('Aucun champ à mettre à jour')
+    this.db.prepare(`UPDATE remote_sessions SET ${sets.join(', ')} WHERE id = ?`).run(...vals, id)
+  }
+
+  listRemoteSessions(limit = 100): RemoteSessionRow[] {
+    return this.db
+      .prepare('SELECT * FROM remote_sessions ORDER BY id DESC LIMIT ?')
+      .all(limit) as unknown as RemoteSessionRow[]
   }
 }
 

@@ -8,6 +8,7 @@ import { registerScanIpc } from './ipc-scan'
 import { registerToolsIpc } from './ipc-tools'
 import { registerMcpIpc, restoreAutostartMcp } from './ipc-mcp'
 import { installSecurity } from './security'
+import { setMainWindow } from './window'
 
 const APP_ID = 'com.bountydesk.app'
 
@@ -70,6 +71,11 @@ function createWindow(): BrowserWindow {
       contextIsolation: true,
       nodeIntegration: false
     }
+  })
+
+  setMainWindow(window)
+  window.on('closed', () => {
+    setMainWindow(null)
   })
 
   window.on('ready-to-show', () => {

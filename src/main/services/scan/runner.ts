@@ -92,6 +92,8 @@ export class ScanRunner {
 
       const intervalMs = Math.max(50, Math.round(1000 / Math.max(1, plan.rateLimit)))
 
+      const missingTools = new Set<string>()
+      let ranTools = 0
       for (const step of plan.steps) {
         if (this.stopped) break
         if (step.args.includes('MISSING_WORDLIST')) {
@@ -111,7 +113,12 @@ export class ScanRunner {
         this.log('info', `${step.tool} ${step.hint}`)
         if (this.stopped) break
         const ok = await this.runStep(step.tool, step.args)
-        if (!ok) this.log('warn', `${step.tool}: binaire introuvable, étape ignorée`)
+        if (!ok) {
+          this.log('warn', `${step.tool}: binaire introuvable, étape ignorée`)
+          missingTools.add(step.tool)
+        } else {
+          ranTools += 1
+        }
         if (this.stopped) break
         await sleep(intervalMs)
       }
@@ -119,6 +126,17 @@ export class ScanRunner {
       if (this.stopped) {
         this.log('warn', 'Scan interrompu par l’utilisateur')
         repo.updateScan(this.scanId, { status: 'stopped', finishedAt: Date.now() })
+      } else if (ranTools === 0 && missingTools.size > 0) {
+        // Ne jamais annoncer « terminé » quand aucun binaire n'a pu être lancé :
+        // l'utilisateur croirait avoir scanné alors que rien n'a tourné.
+        this.log(
+          'err',
+          `Aucun outil n’a pu être lancé (${[...missingTools].join(', ')}). Installez-les depuis l’écran Outils, puis relancez le scan.`
+        )
+        repo.updateScan(this.scanId, { status: 'error', finishedAt: Date.now() })
+      } else if (missingTools.size > 0) {
+        this.log('warn', `Scan terminé, mais ${missingTools.size} outil(s) absent(s) : ${[...missingTools].join(', ')}`)
+        repo.updateScan(this.scanId, { status: 'done', finishedAt: Date.now() })
       } else {
         this.log('ok', 'Scan terminé')
         repo.updateScan(this.scanId, { status: 'done', finishedAt: Date.now() })

@@ -136,4 +136,30 @@ export const migrations: Migration[] = [
       `)
     },
   },
+  {
+    version: 5,
+    up(db) {
+      db.exec(`ALTER TABLE mcp_requests ADD COLUMN remote_ip TEXT NOT NULL DEFAULT '';`)
+    },
+  },
+  {
+    version: 6,
+    up(db) {
+      db.exec(`
+        CREATE TABLE remote_sessions (
+          id           INTEGER PRIMARY KEY AUTOINCREMENT,
+          agent_token  TEXT NOT NULL,
+          agent_label  TEXT NOT NULL DEFAULT '',
+          remote_ip    TEXT NOT NULL DEFAULT '',
+          status       TEXT NOT NULL,
+          width        INTEGER,
+          height       INTEGER,
+          requested_at INTEGER NOT NULL,
+          decided_at   INTEGER,
+          ended_at     INTEGER
+        );
+        CREATE INDEX idx_remote_sessions_ts ON remote_sessions(requested_at);
+      `)
+    },
+  },
 ]

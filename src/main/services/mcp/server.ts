@@ -12,6 +12,7 @@ import { buildPlan, selectTargets, MAX_TARGETS } from '../scan/plan'
 import { activeScanCount, activeScanForProgram, startScan } from '../scan/runner'
 import { getTool, TOOL_CATALOG } from '../tools/catalog'
 import { currentTools, installTool, resolveBinary, toolsDir } from '../tools/installer'
+import { attachAgentsToServer, closeAgents, configureAgents, type AgentAuthEntry } from './agents'
 
 const PROTOCOL_VERSION = '2024-11-05'
 const MAX_BODY = 1024 * 1024
@@ -45,12 +46,20 @@ function asInt(value: unknown, min: number, max: number): number | null {
 }
 
 function splitArgs(str: string): string[] {
-  return str.match(/(?:[^\s"]+|"[^"]*")+/g)?.map((t) => t.replace(/^"|"$/g, '')) ?? []
+  // Supporte les guillemets simples (convention POSIX) comme les guillemets doubles.
+  const tokens = str.match(/"[^"]*"|'[^']*'|\S+/g)
+  if (!tokens) return []
+  return tokens.map((t) =>
+    (t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'"))
+      ? t.slice(1, -1)
+      : t
+  )
 }
 
 const DENY_TOOLS = new Set([
   'cmd', 'powershell', 'pwsh', 'mshta', 'rundll32', 'regsvr32', 'certutil',
   'bitsadmin', 'wscript', 'cscript', 'winget',
+  'sh', 'bash', 'zsh', 'ksh', 'dash', 'busybox', 'env', 'eval', 'xargs',
 ])
 const SAFE_TOOLS = new Set([
   'node', 'python', 'python3', 'pip', 'git', 'tar', 'curl', 'wget', 'jq', 'rg', 'yq', 'go',
@@ -66,7 +75,7 @@ function isAllowedRunTool(tool: string): boolean {
 const runToolDef: McpToolDef = {
   name: 'run_tool',
   description:
-    'Exécute un binaire du catalogue BountyDesk (portable dans %APPDATA%\\BountyDesk\\tools ou binaire PATH comme'
+    'Exécute un binaire du catalogue BountyDesk (portable dans le dossier tools de BountyDesk, ou binaire PATH comme'
     + ' nmap/ffuf) ou un binaire système de confiance (node, python, git, tar, curl, jq, rg, yq, go). Arguments libres'
     + ' en une chaîne, cwd optionnel (doit être sous le dossier tools de BountyDesk), timeout par défaut 120 s. Toute'
     + ' invocation est journalisée (Activité des IA). À n’utiliser que sur des cibles autorisées, dans le scope et selon les ROE.',
@@ -425,7 +434,7 @@ export function setMcpToken(token: string | null): void {
   tokenLabels = new Map()
 }
 
-function audit(tokenLabel: string, tool: string, args: unknown, status: string, ms: number): void {
+function audit(tokenLabel: string, tool: string, args: unknown, status: string, ms: number, remoteIp = ''): void {
   try {
     getRepository().appendMcpRequest({
       ts: Date.now(),
@@ -434,6 +443,7 @@ function audit(tokenLabel: string, tool: string, args: unknown, status: string, 
       argsJson: typeof args === 'string' ? args : JSON.stringify(args ?? {}),
       status,
       ms,
+      remoteIp,
     })
   } catch {
     // l'audit ne doit jamais faire planter une requête
@@ -514,8 +524,9 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
     return
   }
   const authed = authedToken(req)
+  const remoteIp = req.socket.remoteAddress ?? ''
   if (!authed) {
-    audit('', '_unauthorized', {}, '401', 0)
+    audit('', '_unauthorized', {}, '401', 0, remoteIp)
     sendJson(res, 401, { jsonrpc: '2.0', id: null, error: { code: -32001, message: 'Unauthorized' } })
     return
   }
@@ -570,7 +581,7 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
       const start = Date.now()
       const result = await callTool(name, toolArgs)
       const ms = Date.now() - start
-      audit(clientLabel, name || '«tool manquant»', toolArgs, result.isError === true ? 'error' : 'ok', ms)
+      audit(clientLabel, name || '«tool manquant»', toolArgs, result.isError === true ? 'error' : 'ok', ms, remoteIp)
       sendRpcResult(res, id, { content: [{ type: 'text', text: result.text }], isError: result.isError === true })
       return
     }
@@ -586,6 +597,7 @@ function closeServer(): Promise<void> {
   currentLan = false
   currentTokens = []
   tokenLabels = new Map()
+  closeAgents()
   if (!s) return Promise.resolve()
   return new Promise((resolve) => {
     s.close(() => resolve())
@@ -596,7 +608,7 @@ function closeServer(): Promise<void> {
 export async function startMcpServer(
   port: number,
   token: string,
-  opts?: { lan?: boolean; tokens?: string[]; tokenLabels?: Map<string, string> }
+  opts?: { lan?: boolean; tokens?: string[]; tokenLabels?: Map<string, string>; agentTokens?: string[] | AgentAuthEntry[] }
 ): Promise<{ ok: true; port: number } | { ok: false; error: string }> {
   await closeServer()
   return new Promise((resolve, reject) => {
@@ -605,11 +617,18 @@ export async function startMcpServer(
     tokenLabels = opts?.tokenLabels ? new Map(opts.tokenLabels) : new Map()
     currentLan = opts?.lan === true
     const host = currentLan ? '0.0.0.0' : '127.0.0.1'
+    const rawAgents = opts?.agentTokens
+    const agentEntries: AgentAuthEntry[] = Array.isArray(rawAgents)
+      ? (rawAgents as AgentAuthEntry[]).every((a) => typeof a === 'object' && a && 'token' in a)
+        ? (rawAgents as AgentAuthEntry[])
+        : (rawAgents as string[]).map((t, i) => ({ id: `agent-${i + 1}`, label: `Agent ${i + 1}`, token: t }))
+      : []
     const srv = createServer((req: IncomingMessage, res: ServerResponse) => {
       void route(req, res).catch(() => {
         sendJson(res, 500, { error: 'internal error' })
       })
     })
+    attachAgentsToServer(srv)
     srv.once('error', (err: Error & { code?: string }) => {
       currentTokens = []
       tokenLabels = new Map()
@@ -622,6 +641,7 @@ export async function startMcpServer(
       const addr = srv.address()
       const actualPort = typeof addr === 'object' && addr !== null ? addr.port : port
       currentPort = actualPort
+      configureAgents(agentEntries)
       resolve({ ok: true, port: actualPort })
     })
   })
