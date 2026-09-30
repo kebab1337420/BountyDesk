@@ -33,19 +33,20 @@ jobs:
 
       # Electron a besoin de ces bibliotheques pour demarrer. Les tests unitaires
       # mockent `electron`, mais electron-builder embarque un vrai runtime.
-      - name: Dependances runtime Linux
+      # Aucune bibliotheque runtime n'est necessaire : les tests unitaires
+      # mockent `electron` (le runtime n'est donc jamais lance) et
+      # electron-builder empaquette sans executer. Le premier essai installait
+      # libnotify4/libsecret-1-1/..., ce qui echouait sur le miroir apt
+      # restreint du runner ubuntu-22.04 ("Unable to locate package").
+      # Seul le trio de compilation reste utile pour npmRebuild, et il est
+      # tolerant au cas ou le miroir ne l'expose pas.
+      - name: Dependances de build (optionnel)
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
+          sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            libnotify4 libnss3 libxtst6 libsecret-1-1 libasound2 \
-            libatk-bridge2.0-0 libgtk-3-0
-
-      - name: Dependances de build
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get install -y --no-install-recommends \
-            build-essential python3 pkg-config
+            build-essential python3 pkg-config \
+            || echo "::warning::deps de build indisponibles sur ce miroir (aucun module natif a recompiler)"
 
       - name: Install
         run: npm ci
@@ -87,19 +88,20 @@ jobs:
           node-version: '22'
           cache: npm
 
-      - name: Dependances runtime Linux
+      # Aucune bibliotheque runtime n'est necessaire : les tests unitaires
+      # mockent `electron` (le runtime n'est donc jamais lance) et
+      # electron-builder empaquette sans executer. Le premier essai installait
+      # libnotify4/libsecret-1-1/..., ce qui echouait sur le miroir apt
+      # restreint du runner ubuntu-22.04 ("Unable to locate package").
+      # Seul le trio de compilation reste utile pour npmRebuild, et il est
+      # tolerant au cas ou le miroir ne l'expose pas.
+      - name: Dependances de build (optionnel)
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
+          sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            libnotify4 libnss3 libxtst6 libsecret-1-1 libasound2 \
-            libatk-bridge2.0-0 libgtk-3-0
-
-      - name: Dependances de build
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get install -y --no-install-recommends \
-            build-essential python3 pkg-config
+            build-essential python3 pkg-config \
+            || echo "::warning::deps de build indisponibles sur ce miroir (aucun module natif a recompiler)"
 
       - run: npm ci
 
