@@ -1,6 +1,17 @@
 #![allow(non_snake_case)]
 #![allow(non_upper_case_globals)]
 
+// La capture d'écran et l'injection d'entrées utilisent l'API Win32 (user32,
+// gdi32) déclarée en FFI brut dans le module `win` plus bas. Aucun portage
+// Linux/macOS n'existe : on le dit en une ligne plutôt que de laisser
+// API Win32 déclarée en FFI brut : ce module n'existe que sur Windows.
+#[cfg(not(windows))]
+compile_error!(
+    "bountydesk-agent ne cible que Windows (capture BitBlt/GetDIBits + SendInput, \
+     API Win32 en FFI brut). Il n'existe pas de portage Linux : \
+     l'application BountyDesk, elle, fonctionne sur les deux plateformes."
+);
+
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::PathBuf;

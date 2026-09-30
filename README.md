@@ -16,7 +16,7 @@ Autres prérequis communs :
 
 - Un token d'API Intigriti (onglet *Settings* → *API* sur le site Intigriti, rôle *External Researcher*).
 - Accès réseau vers `api.intigriti.com` et `api.github.com` (téléchargement des outils portables).
-- Pour l'agent distant Rust : une toolchain Rust (`cargo`), voir [Agent distant](#agent-distant-rust).
+- Pour l'agent distant Rust : une toolchain Rust (`cargo`) **sous Windows uniquement**, voir [Agent distant](#agent-distant-rust).
 
 ## Installation
 
@@ -105,11 +105,15 @@ Détails qui comptent :
 
 ### Agent distant Rust
 
-`remote-agent/` contient un agent Rust qui capture et streame l'écran d'un second poste vers la vue isolée de BountyDesk. C'est un binaire **compilé séparément, par plateforme** :
+`remote-agent/` contient un agent Rust qui streame l'écran d'un second poste vers la vue isolée de BountyDesk.
+
+> **Cet agent est Windows uniquement.** La capture (BitBlt/GetDIBits) et l'injection d'entrées (SendInput) utilisent l'API Win32 déclarée en FFI brut dans `remote-agent/src/main.rs`, sans couche de portage. Un `cargo build` hors de Windows s'arrête volontairement sur un `compile_error!` explicite. Le reste de BountyDesk, lui, tourne sur Windows et Linux.
+
+C'est un binaire **compilé séparément** :
 
 ```bash
 cd remote-agent
-cargo build --release          # produit target/release/bountydesk-agent[.exe]
+cargo build --release          # produit target/release/bountydesk-agent.exe
 ```
 
 L'agent lit son `config.json` **à côté de son propre exécutable** (pas dans le répertoire courant) :
@@ -155,7 +159,7 @@ src/
   preload/         # contextBridge → window.bountydesk
   renderer/        # React (UI seule, sans réseau ni SQL)
   shared/ipc.ts    # contrat de types et canaux partagés
-remote-agent/      # agent Rust d'écran distant (binaire séparé, compilé par plateforme)
+remote-agent/      # agent Rust d'ecran distant (Windows uniquement, compile a part)
 agent/             # pack Claude Code + skills
 tests/             # Vitest (API, schema, throttler, paginate, db, scan, catalogue, plateforme, installer, MCP)
 openapi/           # spec OpenAPI Intigriti vendored

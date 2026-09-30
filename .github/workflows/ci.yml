@@ -1,0 +1,177 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: verify (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: Windows
+          - os: ubuntu-22.04
+            label: Linux
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      # Electron a besoin de ces bibliotheques pour demarrer. Les tests unitaires
+      # mockent `electron`, mais electron-builder embarque un vrai runtime.
+      - name: Dependances runtime Linux
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libnotify4 libnss3 libxtst6 libsecret-1-1 libasound2 \
+            libatk-bridge2.0-0 libgtk-3-0
+
+      - name: Dependances de build
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get install -y --no-install-recommends \
+            build-essential python3 pkg-config
+
+      - name: Install
+        run: npm ci
+
+      # Node >= 24 bloque les scripts postinstall par defaut : on recupere le
+      # binaire Electron explicitement (cf. README, section Installation).
+      - name: Binaire Electron
+        run: node node_modules/electron/install.js
+
+      - name: Tests + typecheck + build
+        run: npm run pack:check
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: out-${{ matrix.os }}
+          path: out/
+          retention-days: 7
+
+  package:
+    name: package (${{ matrix.label }})
+    needs: verify
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: Windows
+            script: dist:win
+          - os: ubuntu-22.04
+            label: Linux
+            script: dist:linux
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Dependances runtime Linux
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libnotify4 libnss3 libxtst6 libsecret-1-1 libasound2 \
+            libatk-bridge2.0-0 libgtk-3-0
+
+      - name: Dependances de build
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get install -y --no-install-recommends \
+            build-essential python3 pkg-config
+
+      - run: npm ci
+
+      - name: Binaire Electron
+        run: node node_modules/electron/install.js
+
+      # On lance exactement la commande documentee dans le README, afin que la CI
+      # verifie le chemin que l'utilisateur suit, pas une variante parallele.
+      - name: Empaquetage
+        run: npm run ${{ matrix.script }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.os }}
+          path: |
+            dist/*.exe
+            dist/*.AppImage
+            dist/*.deb
+          if-no-files-found: error
+          retention-days: 14
+
+  agent:
+    name: agent Rust (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Compiler l'agent
+        working-directory: remote-agent
+        run: cargo build --release
+
+      - run: npm ci
+
+      # L'agent lit son config.json a cote de son executable : le test le copie
+      # dans un dossier jetable. Sans ce build, le test serait ignore en silence.
+      - name: Test de bout en bout de l'agent
+        run: npx vitest run tests/agent-rust.test.ts
+
+  agent-windows-only:
+    name: agent Rust refuse de compiler hors Windows
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # Le README affirme que l'agent est Windows uniquement. Plutot que de
+      # laisser cette phrase se degrader dans la doc, on verifie l'invariant :
+      # le build Linux doit echouer sur le compile_error! volontaire.
+      - name: Le build Linux doit echouer explicitement
+        working-directory: remote-agent
+        run: |
+          set +e
+          cargo check --release 2>&1 | tee /tmp/agent-check.log
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "::error::l'agent distant compile sous Linux alors que la doc annonce Windows uniquement"
+            exit 1
+          fi
+          if ! grep -q "compile_error\|Windows uniquement" /tmp/agent-check.log; then
+            echo "::error::le build Linux echoue sans le message explicite attendu"
+            cat /tmp/agent-check.log
+            exit 1
+          fi
+          echo "invariant respecte : build Linux refuse avec un message explicite"
