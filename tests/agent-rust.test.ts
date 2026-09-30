@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { chmodSync, copyFileSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawn, ChildProcess } from 'node:child_process'
 import WebSocket from 'ws'
+import { exeSuffix } from '../src/main/services/tools/platform'
 
 const userData = mkdtempSync(join(tmpdir(), 'bountydesk-agentrust-test-'))
 
@@ -53,7 +54,14 @@ async function waitFor<T>(fn: () => T | null, timeout = 8000): Promise<T> {
   throw new Error('timeout attente condition')
 }
 
-describe('agent rust (binaire réel)', () => {
+// L'agent Rust est un binaire séparé, compilé pour une seule plateforme :
+// ce test ne peut tourner que s'il existe (cargo build --release dans remote-agent/).
+// Sans ce garde-fou, `npm test` échoue sur toute machine où il n'est pas buildé.
+const agentBinName = `bountydesk-agent${exeSuffix()}`
+const agentBin = join(__dirname, '../remote-agent/target/release', agentBinName)
+const agentBuilt = existsSync(agentBin)
+
+describe.skipIf(!agentBuilt)('agent rust (binaire réel)', () => {
   beforeEach(async () => {
     closeDb()
     rmSync(join(userData, 'bountydesk.db'), { force: true })
@@ -73,13 +81,15 @@ describe('agent rust (binaire réel)', () => {
 
   it('l’exe agent se connecte, est marqué en ligne et répond au startStream', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'agent-exe-'))
-    const exe = join(dir, 'bountydesk-agent.exe')
-    copyFileSync(join(__dirname, '../remote-agent/target/release/bountydesk-agent.exe'), exe)
-    chmodSync(exe, 0o755)
+    // l'agent lit son config.json à côté de son propre binaire, pas dans le cwd :
+    // il faut donc l'exécuter depuis un dossier jetable qui contient les deux.
+    const exe = join(dir, agentBinName)
+    copyFileSync(agentBin, exe)
+    if (process.platform !== 'win32') chmodSync(exe, 0o755)
     writeFileSync(
       join(dir, 'config.json'),
       JSON.stringify({ server: '127.0.0.1', port, token: AGENT_TOKEN, fps: 5 }),
-      { flag: 'w' },
+      { flag: 'w' }
     )
 
     const child: ChildProcess = spawn(exe, [], { cwd: dir, stdio: 'ignore', detached: false })
