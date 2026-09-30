@@ -5,6 +5,25 @@ import { join } from 'node:path'
 
 const userData = mkdtempSync(join(tmpdir(), 'bountydesk-mcp-http-test-'))
 
+// Le diagnostic interroge le pare-feu du systeme (netsh sous Windows, ufw puis
+// firewalld ailleurs). Un vrai appel sur un runner CI froid depasse le timeout
+// du test alors que sa valeur n'est pas ce que le test verifie : il accepte
+// 'ok', 'missing' ou 'unmanaged'. On neutralise donc execFile seulement ; spawn
+// reste reel, un autre test de ce fichier execute un binaire du PATH.
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>()
+  const execFile = (
+    _cmd: string,
+    _args: string[],
+    _opts: unknown,
+    cb: (err: Error | null, stdout: string, stderr: string) => void
+  ): unknown => {
+    cb(null, 'BountyDesk', '')
+    return {}
+  }
+  return { ...actual, execFile, default: { ...actual, execFile } }
+})
+
 vi.mock('electron', () => ({
   app: { getPath: () => userData },
   safeStorage: {
