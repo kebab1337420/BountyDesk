@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "description": "BountyDesk - bureau du chercheur Intigriti",
   "main": "./out/main/index.js",
-  "author": "whitehat",
+  "author": "whitehat <kebab1337420@users.noreply.github.com>",
   "license": "UNLICENSED",
   "private": true,
   "scripts": {
@@ -39,5 +39,6 @@
     "typescript": "^7.0.2",
     "vite": "^7.3.6",
     "vitest": "^5.0.1"
-  }
+  },
+  "desktopName": "BountyDesk"
 }
