@@ -194,12 +194,21 @@ jobs:
           name: dist-ubuntu-22.04
           path: dist
 
+      # Chaque paquet est installe independamment : le miroir apt de ce runner
+      # n'expose pas tous les paquets, et c'est le lancement de l'app qui doit
+      # decide si une bibliotheque manquante est un vrai probleme. Un echec
+      # ici doit donc produire un avertissement, pas un job rouge.
       - name: Dependances d'execution
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            xvfb libnss3 libatk-bridge2.0-0 libgtk-3-0 libasound2 \
-            libsecret-1-1 libnotify4 libxtst6
+          for pkg in xvfb libnss3 libatk-bridge2.0-0 libgtk-3-0 libasound2 \
+                     libsecret-1-1 libnotify4 libxtst6; do
+            if sudo apt-get install -y --no-install-recommends "$pkg" >/dev/null 2>&1; then
+              echo "installe : $pkg"
+            else
+              echo "::warning::paquet indisponible sur ce runner : $pkg"
+            fi
+          done
 
       # --appimage-extract evite FUSE, absent ou empirique sur les runners.
       - name: Extraire l'AppImage
