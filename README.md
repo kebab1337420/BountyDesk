@@ -58,6 +58,23 @@ node node_modules/electron/install.js
 | `npm run dist:all` | les deux plateformes (à lancer sur chaque OS : un AppImage ne se cross-build pas de façon fiable) |
 | `npm run dist` | alias de `dist:win` (compatibilité) |
 
+### Intégration continue
+
+`.github/workflows/ci.yml` s'exécute à chaque push sur `main` et à chaque pull request, sur 6 jobs :
+
+| Job | Ce qu'il prouve |
+|---|---|
+| `verify` (Windows + Linux) | `npm run pack:check` passe sur les deux plateformes |
+| `package` (Windows + Linux) | l'installeur NSIS, l'AppImage et le deb se construisent vraiment |
+| `agent` | l'agent Rust compile et passe son test de bout en bout (Windows) |
+| `agent-windows-only` | le build de l'agent **échoue** hors Windows, avec le message explicite attendu |
+| `smoke-linux` | l'AppImage se lance et son processus tient 30 s |
+| `smoke-windows` | l'installeur NSIS s'installe en silence et l'application se lance |
+
+Les artefacts NSIS, AppImage et deb sont publiés en artifact de chaque run.
+
+Le port MCP n'est volontairement pas vérifié par les jobs de smoke test : le serveur ne démarre que si la configuration contient un jeton chiffré, qu'un test externe ne peut pas forger. Ce qui est vérifié, c'est que le binaire démarre et reste vivant.
+
 ## Fonctionnalités
 
 ### Programmes et sync

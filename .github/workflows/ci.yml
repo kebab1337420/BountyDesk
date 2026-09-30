@@ -177,3 +177,88 @@ jobs:
             exit 1
           fi
           echo "invariant respecte : build Linux refuse avec un message explicite"
+
+  # Les jobs package prouvent que les artefacts se construisent. Ceux-ci prouvent
+  # qu'ils se demarrent : c'etait le dernier maillon non couvert.
+  # On ne verifie pas le port 8787 : le serveur MCP ne demarre que si la config
+  # contient un jeton chiffre, qu'on ne peut pas forger depuis l'exterieur.
+  # On verifie donc que le processus Electron tient, pas qu'il ecoute.
+  smoke-linux:
+    name: smoke (AppImage demarre)
+    needs: package
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist-ubuntu-22.04
+          path: dist
+
+      - name: Dependances d'execution
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            xvfb libnss3 libatk-bridge2.0-0 libgtk-3-0 libasound2 \
+            libsecret-1-1 libnotify4 libxtst6
+
+      # --appimage-extract evite FUSE, absent ou empirique sur les runners.
+      - name: Extraire l'AppImage
+        run: |
+          chmod +x dist/*.AppImage
+          ./dist/*.AppImage --appimage-extract
+          test -x squashfs-root/AppRun || { echo "::error::AppRun introuvable"; exit 1; }
+          ls squashfs-root
+
+      - name: Lancer et verifier que le processus tient
+        run: |
+          set -e
+          timeout 60 xvfb-run -a ./squashfs-root/AppRun --no-sandbox --disable-gpu \
+            > /tmp/app.log 2>&1 &
+          pid=$!
+          for i in $(seq 1 30); do
+            sleep 1
+            if ! kill -0 "$pid" 2>/dev/null; then
+              echo "::error::l'AppImage a quitte apres ${i}s"
+              cat /tmp/app.log
+              exit 1
+            fi
+          done
+          echo "::notice::AppImage vivante apres 30s (pid $pid)"
+          cat /tmp/app.log || true
+          kill "$pid" 2>/dev/null || true
+
+  smoke-windows:
+    name: smoke (installeur NSIS + lancement)
+    needs: package
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist-windows-latest
+          path: dist
+
+      # Meme sequence que la validation locale : installateur silencieux, puis
+      # verification que l'executable a bien ete pose.
+      - name: Installation silencieuse
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $setup = (Resolve-Path 'dist\BountyDesk-Setup-0.1.0.exe').Path
+          $p = Start-Process -FilePath $setup -ArgumentList '/S' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "installateur sorti en $($p.ExitCode)" }
+          $exe = Join-Path $env:LOCALAPPDATA 'Programs\BountyDesk\BountyDesk.exe'
+          if (-not (Test-Path $exe)) { throw "executable absent apres installation : $exe" }
+          "installee : $exe"
+
+      - name: Lancer et verifier que le processus tient
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = Join-Path $env:LOCALAPPDATA 'Programs\BountyDesk\BountyDesk.exe'
+          $proc = Start-Process -FilePath $exe -PassThru
+          Start-Sleep -Seconds 25
+          if ($proc.HasExited) { throw "l'app a quitte (code $($proc.ExitCode))" }
+          "::notice::application vivante, PID $($proc.Id)"
+          Get-Process -Id $proc.Id | Select-Object Id, ProcessName
+          Stop-Process -Id $proc.Id -Force
