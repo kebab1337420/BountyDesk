@@ -30,6 +30,9 @@ const bridge: BountyDeskBridge = {
   tools: {
     list: () => ipcRenderer.invoke(IPC.ToolsList),
     install: (id: string) => ipcRenderer.invoke(IPC.ToolsInstall, id),
+    githubTokenStatus: () => ipcRenderer.invoke(IPC.ToolsGitHubTokenGet),
+    githubTokenSet: (token: string) => ipcRenderer.invoke(IPC.ToolsGitHubTokenSet, token),
+    githubTokenClear: () => ipcRenderer.invoke(IPC.ToolsGitHubTokenClear),
   },
   mcp: {
     status: () => ipcRenderer.invoke(IPC.McpStatus),
@@ -39,6 +42,24 @@ const bridge: BountyDeskBridge = {
     addToken: (label: string) => ipcRenderer.invoke(IPC.McpTokenAdd, { label }),
     revokeToken: (id: string) => ipcRenderer.invoke(IPC.McpTokenRevoke, { id }),
     requests: (limit?: number) => ipcRenderer.invoke(IPC.McpRequests, { limit: limit ?? null }),
+    diagnose: () => ipcRenderer.invoke(IPC.McpDiagnose),
+    firewallFix: () => ipcRenderer.invoke(IPC.McpFirewallFix),
+    machines: (limit?: number) => ipcRenderer.invoke(IPC.McpMachines, { limit: limit ?? null }),
+  },
+  agent: {
+    tokens: () => ipcRenderer.invoke(IPC.AgentTokens),
+    addToken: (label: string) => ipcRenderer.invoke(IPC.AgentTokenAdd, { label }),
+    revokeToken: (id: string) => ipcRenderer.invoke(IPC.AgentTokenRevoke, { id }),
+    statuses: () => ipcRenderer.invoke(IPC.AgentStatuses),
+    sessions: () => ipcRenderer.invoke(IPC.AgentSessions),
+    sessionRequest: (tokenId: string) => ipcRenderer.invoke(IPC.AgentSessionRequest, { tokenId }),
+    sessionDecide: (sessionId: number, approve: boolean) =>
+      ipcRenderer.invoke(IPC.AgentSessionDecide, { sessionId, approve }),
+    sessionEnd: (viewToken: string) => ipcRenderer.invoke(IPC.AgentSessionEnd, { viewToken }),
+    getViewToken: () => {
+      const arg = process.argv.find((a) => a.startsWith('--bountydesk-view-token='))
+      return arg ? arg.slice('--bountydesk-view-token='.length) : ''
+    },
   },
   favorites: {
     set: (programId: string, favorite: boolean) =>

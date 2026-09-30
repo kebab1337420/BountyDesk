@@ -1,4 +1,11 @@
 import type {
+  AgentSessionDecideResult,
+  AgentSessionRequestResult,
+  AgentSessionsResult,
+  AgentStatusesResult,
+  AgentTokenAddResult,
+  AgentTokenRevokeResult,
+  AgentTokensResult,
   AuthStatus,
   AuthValidateResult,
   CredentialInput,
@@ -9,6 +16,9 @@ import type {
   DbResult,
   DetailResult,
   GroupInfo,
+  McpDiagnoseResult,
+  McpFirewallFixResult,
+  McpMachinesResult,
   McpRegenerateResult,
   McpRequestsResult,
   McpSetEnabledResult,
@@ -25,7 +35,9 @@ import type {
   SyncResult,
   TagInfo,
   ToolInstallResult,
-  ToolsListResult
+  ToolsListResult,
+  GitHubTokenStatusResult,
+  GitHubTokenSetResult
 } from '../../shared/ipc'
 
 export const Api = {
@@ -59,7 +71,10 @@ export const Api = {
   },
   tools: {
     list: (): Promise<ToolsListResult> => window.bountydesk.tools.list(),
-    install: (id: string): Promise<ToolInstallResult> => window.bountydesk.tools.install(id)
+    install: (id: string): Promise<ToolInstallResult> => window.bountydesk.tools.install(id),
+    githubTokenStatus: (): Promise<GitHubTokenStatusResult> => window.bountydesk.tools.githubTokenStatus(),
+    githubTokenSet: (token: string): Promise<GitHubTokenSetResult> => window.bountydesk.tools.githubTokenSet(token),
+    githubTokenClear: (): Promise<DbResult> => window.bountydesk.tools.githubTokenClear()
   },
   mcp: {
     status: (): Promise<McpStatusInfo> => window.bountydesk.mcp.status(),
@@ -68,7 +83,23 @@ export const Api = {
     regenerateToken: (): Promise<McpRegenerateResult> => window.bountydesk.mcp.regenerateToken(),
     addToken: (label: string): Promise<McpTokenAddResult> => window.bountydesk.mcp.addToken(label),
     revokeToken: (id: string): Promise<McpTokenRevokeResult> => window.bountydesk.mcp.revokeToken(id),
-    requests: (limit?: number): Promise<McpRequestsResult> => window.bountydesk.mcp.requests(limit)
+    requests: (limit?: number): Promise<McpRequestsResult> => window.bountydesk.mcp.requests(limit),
+    diagnose: (): Promise<McpDiagnoseResult> => window.bountydesk.mcp.diagnose(),
+    firewallFix: (): Promise<McpFirewallFixResult> => window.bountydesk.mcp.firewallFix(),
+    machines: (limit?: number): Promise<McpMachinesResult> => window.bountydesk.mcp.machines(limit)
+  },
+  agent: {
+    tokens: (): Promise<AgentTokensResult> => window.bountydesk.agent.tokens(),
+    addToken: (label: string): Promise<AgentTokenAddResult> => window.bountydesk.agent.addToken(label),
+    revokeToken: (id: string): Promise<AgentTokenRevokeResult> => window.bountydesk.agent.revokeToken(id),
+    statuses: (): Promise<AgentStatusesResult> => window.bountydesk.agent.statuses(),
+    sessions: (): Promise<AgentSessionsResult> => window.bountydesk.agent.sessions(),
+    sessionRequest: (tokenId: string): Promise<AgentSessionRequestResult> =>
+      window.bountydesk.agent.sessionRequest(tokenId),
+    sessionDecide: (sessionId: number, approve: boolean): Promise<AgentSessionDecideResult> =>
+      window.bountydesk.agent.sessionDecide(sessionId, approve),
+    sessionEnd: (viewToken: string): Promise<DbResult> => window.bountydesk.agent.sessionEnd(viewToken),
+    getViewToken: (): string => window.bountydesk.agent.getViewToken()
   },
   favorites: {
     set: (programId: string, favorite: boolean): Promise<DbResult> =>

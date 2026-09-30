@@ -2,10 +2,14 @@ import { describe, expect, it } from 'vitest'
 import { TOOL_CATALOG, getTool } from '../src/main/services/tools/catalog'
 
 describe('catalogue d’outils', () => {
-  it('chaque outil a un id unique', () => {
+  it('chaque outil a un id unique et un wingetId unique', () => {
     const ids = TOOL_CATALOG.map((t) => t.id)
     expect(new Set(ids).size).toBe(ids.length)
     expect(getTool(ids[0]!)).toBeDefined()
+    const wingetIds = TOOL_CATALOG.filter((t) => t.wingetId).map((t) => t.wingetId!)
+    expect(new Set(wingetIds).size, 'wingetId dupliqué : deux outils installeraient le même paquet').toBe(
+      wingetIds.length
+    )
   })
 
   it('winget ont un wingetId, github un repo + asset, git un repo', () => {
@@ -48,9 +52,58 @@ describe('catalogue d’outils', () => {
   })
 
   it('le catalogue étendu couvre la panoplie recon/fuzz/utility', () => {
-    expect(TOOL_CATALOG.length).toBeGreaterThanOrEqual(28)
+    expect(TOOL_CATALOG.length).toBeGreaterThanOrEqual(250)
     for (const id of ['nmap', 'nuclei', 'subfinder', 'httpx', 'katana', 'naabu', 'dnsx', 'asnmap', 'uncover', 'alterx', 'amass', 'aquatone', 'waybackurls', 'ffuf', 'gobuster', 'dalfox', 'interactsh-client', 'jq', 'ripgrep', 'git', 'python', 'go', 'node', 'yq', 'gitleaks', 'seclists', 'ai-hunter']) {
       expect(getTool(id), `outil manquant : ${id}`).toBeDefined()
+    }
+  })
+
+  it('les piliers du catalogue élargi sont présents et correctement sourcés', () => {
+    for (const id of [
+      'feroxbuster',
+      'findomain',
+      'tlsx',
+      'shuffledns',
+      'gau',
+      'theharvester',
+      'bbot',
+      'ffuf',
+      'commix',
+      'wpscan',
+      'nikto',
+      'chisel',
+      'bettercap',
+      'rustscan',
+      'mitmproxy',
+      'trufflehog',
+      'hashcat',
+      'impacket',
+      'bloodhound',
+      'burpsuite',
+      'zap',
+      'jq',
+      'syft',
+      'trivy'
+    ]) {
+      const t = getTool(id)
+      expect(t, `outil manquant : ${id}`).toBeDefined()
+      expect(['winget', 'github', 'git']).toContain(t!.source)
+    }
+    // les outils github doivent tous pointer un asset de release vérifié
+    for (const id of ['feroxbuster', 'findomain', 'tlsx', 'gau', 'trufflehog', 'chisel', 'rustscan', 'bettercap']) {
+      const t = getTool(id)!
+      expect(t.source, `${id} devrait être installé depuis une release`).toBe('github')
+      expect(t.githubAsset, `${id} sans githubAsset`).toBeTruthy()
+    }
+  })
+
+  it('les outils marqués par défaut restent une sélection raisonnable', () => {
+    const prechecked = TOOL_CATALOG.filter((t) => t.defaultChecked).map((t) => t.id)
+    expect(prechecked.length).toBeGreaterThan(0)
+    expect(prechecked.length).toBeLessThanOrEqual(15)
+    // on ne coche jamais un clone de dépôt volumineux par défaut
+    for (const t of TOOL_CATALOG.filter((x) => x.defaultChecked)) {
+      expect(['seclists', 'payloads-all-things', 'assetnote-wordlists', 'fuzzdb']).not.toContain(t.id)
     }
   })
 })

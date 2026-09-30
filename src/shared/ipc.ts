@@ -29,12 +29,26 @@ export const IPC = {
   ScanStop: 'scan:stop',
   ToolsList: 'tools:list',
   ToolsInstall: 'tools:install',
+  ToolsGitHubTokenGet: 'tools:githubToken:get',
+  ToolsGitHubTokenSet: 'tools:githubToken:set',
+  ToolsGitHubTokenClear: 'tools:githubToken:clear',
   McpStatus: 'mcp:status',
   McpSetEnabled: 'mcp:setEnabled',
   McpRegenerateToken: 'mcp:regenerateToken',
   McpTokenAdd: 'mcp:tokenAdd',
   McpTokenRevoke: 'mcp:tokenRevoke',
-  McpRequests: 'mcp:requests'
+  McpRequests: 'mcp:requests',
+  McpDiagnose: 'mcp:diagnose',
+  McpFirewallFix: 'mcp:firewallFix',
+  McpMachines: 'mcp:machines',
+  AgentTokens: 'agent:tokens',
+  AgentTokenAdd: 'agent:tokenAdd',
+  AgentTokenRevoke: 'agent:tokenRevoke',
+  AgentStatuses: 'agent:statuses',
+  AgentSessions: 'agent:sessions',
+  AgentSessionRequest: 'agent:sessionRequest',
+  AgentSessionDecide: 'agent:sessionDecide',
+  AgentSessionEnd: 'agent:sessionEnd'
 } as const
 
 export interface AuthStatus {
@@ -211,6 +225,10 @@ export type ToolsListResult = { ok: true; tools: ToolEntry[] } | DbFail
 
 export type ToolInstallResult = { ok: true; installed: boolean; output: string } | { ok: false; error: string; output: string }
 
+export type GitHubTokenStatusResult = { ok: true; configured: boolean } | DbFail
+
+export type GitHubTokenSetResult = { ok: true } | DbFail
+
 export interface McpTokenInfo {
   id: string
   label: string
@@ -243,9 +261,84 @@ export interface McpRequestRow {
   args: string
   status: string
   ms: number
+  remoteIp: string
 }
 
 export type McpRequestsResult = { ok: true; rows: McpRequestRow[] } | DbFail
+
+export interface McpMachineInfo {
+  tokenLabel: string
+  lastSeen: number
+  calls: number
+  errors: number
+  ips: string[]
+}
+
+export type McpMachinesResult = { ok: true; machines: McpMachineInfo[] } | DbFail
+
+export type McpFirewallState = 'ok' | 'missing' | 'unmanaged'
+
+export interface McpDiagnoseInfo {
+  running: boolean
+  port: number | null
+  lan: boolean
+  firewall: McpFirewallState
+  selfTest: { ok: boolean; ms: number | null; error?: string } | null
+  recentErrors: McpRequestRow[]
+}
+
+export type McpDiagnoseResult = { ok: true; diag: McpDiagnoseInfo } | DbFail
+
+export type McpFirewallFixResult = { ok: true; firewall: McpFirewallState } | DbFail
+
+export interface AgentTokenInfo {
+  id: string
+  label: string
+  token: string
+}
+
+export interface AgentStatusInfo {
+  id: string
+  label: string
+  online: boolean
+  hostname: string
+  ip: string
+  lastSeen: number | null
+  streaming: boolean
+  latency: number | null
+  activeSession: number | null
+}
+
+export interface RemoteSessionInfo {
+  id: number
+  agentToken: string
+  agentLabel: string
+  remoteIp: string
+  status: 'pending' | 'active' | 'refused' | 'ended'
+  width: number | null
+  height: number | null
+  requestedAt: number
+  decidedAt: number | null
+  endedAt: number | null
+}
+
+export type AgentTokensResult = { ok: true; port: number | null; hosts: string[]; tokens: AgentTokenInfo[] } | DbFail
+
+export type AgentTokenAddResult =
+  | { ok: true; token: string; port: number | null; hosts: string[]; tokens: AgentTokenInfo[] }
+  | DbFail
+
+export type AgentTokenRevokeResult = { ok: true; port: number | null; hosts: string[]; tokens: AgentTokenInfo[] } | DbFail
+
+export type AgentStatusesResult = { ok: true; agents: AgentStatusInfo[] } | DbFail
+
+export type AgentSessionsResult = { ok: true; sessions: RemoteSessionInfo[] } | DbFail
+
+export type AgentSessionRequestResult = { ok: true; session: RemoteSessionInfo | null } | DbFail
+
+export type AgentSessionDecideResult = { ok: true; session: RemoteSessionInfo } | DbFail
+
+export type AgentViewTokenResult = { ok: true; token: string } | DbFail
 
 export interface BountyDeskBridge {
   auth: {
@@ -276,6 +369,9 @@ export interface BountyDeskBridge {
   tools: {
     list(): Promise<ToolsListResult>
     install(id: string): Promise<ToolInstallResult>
+    githubTokenStatus(): Promise<GitHubTokenStatusResult>
+    githubTokenSet(token: string): Promise<GitHubTokenSetResult>
+    githubTokenClear(): Promise<DbResult>
   }
   mcp: {
     status(): Promise<McpStatusInfo>
@@ -284,6 +380,20 @@ export interface BountyDeskBridge {
     addToken(label: string): Promise<McpTokenAddResult>
     revokeToken(id: string): Promise<McpTokenRevokeResult>
     requests(limit?: number): Promise<McpRequestsResult>
+    diagnose(): Promise<McpDiagnoseResult>
+    firewallFix(): Promise<McpFirewallFixResult>
+    machines(limit?: number): Promise<McpMachinesResult>
+  }
+  agent: {
+    tokens(): Promise<AgentTokensResult>
+    addToken(label: string): Promise<AgentTokenAddResult>
+    revokeToken(id: string): Promise<AgentTokenRevokeResult>
+    statuses(): Promise<AgentStatusesResult>
+    sessions(): Promise<AgentSessionsResult>
+    sessionRequest(tokenId: string): Promise<AgentSessionRequestResult>
+    sessionDecide(sessionId: number, approve: boolean): Promise<AgentSessionDecideResult>
+    sessionEnd(viewToken: string): Promise<DbResult>
+    getViewToken(): string
   }
   favorites: {
     set(programId: string, favorite: boolean): Promise<DbResult>

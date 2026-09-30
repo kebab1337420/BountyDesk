@@ -1,11 +1,41 @@
 import { ipcMain } from 'electron'
-import { IPC, type ToolInstallResult, type ToolsListResult } from '../shared/ipc'
+import { IPC, type DbResult, type GitHubTokenSetResult, type GitHubTokenStatusResult, type ToolInstallResult, type ToolsListResult } from '../shared/ipc'
+import { clearGithubToken, loadGithubToken, saveGithubToken } from './storage'
 import { currentTools, installTool } from './services/tools/installer'
 
 export function registerToolsIpc(): void {
   ipcMain.handle(IPC.ToolsList, async (): Promise<ToolsListResult> => {
     try {
       return { ok: true, tools: await currentTools() }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
+  ipcMain.handle(IPC.ToolsGitHubTokenGet, async (): Promise<GitHubTokenStatusResult> => {
+    try {
+      return { ok: true, configured: (process.env.GITHUB_TOKEN ?? loadGithubToken()) !== null }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
+  ipcMain.handle(IPC.ToolsGitHubTokenSet, async (_event, raw: unknown): Promise<GitHubTokenSetResult> => {
+    if (typeof raw !== 'string' || raw.length < 1 || raw.length > 200) {
+      return { ok: false, error: 'Token GitHub invalide.' }
+    }
+    try {
+      saveGithubToken(raw.trim())
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
+  ipcMain.handle(IPC.ToolsGitHubTokenClear, async (): Promise<DbResult> => {
+    try {
+      clearGithubToken()
+      return { ok: true }
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) }
     }
