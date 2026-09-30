@@ -16,10 +16,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "pack:check": "npm run test && npm run typecheck && npm run build",
-    "dist": "npm run pack:check && electron-builder --win nsis",
-    "dist:win": "npm run pack:check && electron-builder --win nsis",
-    "dist:linux": "npm run pack:check && electron-builder --linux AppImage deb",
-    "dist:all": "npm run pack:check && electron-builder --win nsis --linux AppImage deb"
+    "dist": "npm run pack:check && electron-builder --win nsis --publish never",
+    "dist:win": "npm run pack:check && electron-builder --win nsis --publish never",
+    "dist:linux": "npm run pack:check && electron-builder --linux AppImage deb --publish never",
+    "dist:all": "npm run pack:check && electron-builder --win nsis --linux AppImage deb --publish never"
   },
   "dependencies": {
     "ws": "^8.22.0",
