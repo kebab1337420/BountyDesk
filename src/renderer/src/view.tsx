@@ -5,6 +5,7 @@ import './styles.css'
 export default function View(): React.JSX.Element {
   const imgRef = useRef<HTMLImageElement>(null)
   const wsRef = useRef<WebSocket | null>(null)
+  const tokenRef = useRef('')
   const [connected, setConnected] = useState(false)
   const [size, setSize] = useState<{ width: number; height: number } | null>(null)
   const [message, setMessage] = useState('Connexion…')
@@ -14,11 +15,13 @@ export default function View(): React.JSX.Element {
   useEffect(() => {
     let closed = false
     void (async () => {
-      const token = Api.agent.getViewToken()
-      if (!token) {
-        setMessage('Fenêtre de vue invalide (jeton manquant).')
+      const res = await Api.agent.viewToken()
+      if (!res.ok) {
+        setMessage('Fenêtre de vue invalide (jeton refusé).')
         return
       }
+      const token = res.token
+      tokenRef.current = token
       const status = await Api.mcp.status()
       const port = status.port ?? 8787
       const ws = new WebSocket(`ws://127.0.0.1:${port}/agent/view?token=${encodeURIComponent(token)}`)
@@ -123,7 +126,7 @@ export default function View(): React.JSX.Element {
 
   const disconnect = (): void => {
     const ws = wsRef.current
-    const token = Api.agent.getViewToken()
+    const token = tokenRef.current
     ws?.close()
     wsRef.current = null
     if (token) {

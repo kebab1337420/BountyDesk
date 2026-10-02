@@ -56,10 +56,7 @@ const bridge: BountyDeskBridge = {
     sessionDecide: (sessionId: number, approve: boolean) =>
       ipcRenderer.invoke(IPC.AgentSessionDecide, { sessionId, approve }),
     sessionEnd: (viewToken: string) => ipcRenderer.invoke(IPC.AgentSessionEnd, { viewToken }),
-    getViewToken: () => {
-      const arg = process.argv.find((a) => a.startsWith('--bountydesk-view-token='))
-      return arg ? arg.slice('--bountydesk-view-token='.length) : ''
-    },
+    viewToken: () => ipcRenderer.invoke(IPC.AgentViewToken),
   },
   favorites: {
     set: (programId: string, favorite: boolean) =>

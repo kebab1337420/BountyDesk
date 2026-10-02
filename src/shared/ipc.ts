@@ -48,7 +48,8 @@ export const IPC = {
   AgentSessions: 'agent:sessions',
   AgentSessionRequest: 'agent:sessionRequest',
   AgentSessionDecide: 'agent:sessionDecide',
-  AgentSessionEnd: 'agent:sessionEnd'
+  AgentSessionEnd: 'agent:sessionEnd',
+  AgentViewToken: 'agent:viewToken'
 } as const
 
 export interface AuthStatus {
@@ -393,7 +394,7 @@ export interface BountyDeskBridge {
     sessionRequest(tokenId: string): Promise<AgentSessionRequestResult>
     sessionDecide(sessionId: number, approve: boolean): Promise<AgentSessionDecideResult>
     sessionEnd(viewToken: string): Promise<DbResult>
-    getViewToken(): string
+    viewToken(): Promise<AgentViewTokenResult>
   }
   favorites: {
     set(programId: string, favorite: boolean): Promise<DbResult>
