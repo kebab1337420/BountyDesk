@@ -15,7 +15,13 @@ export interface ProgramInput {
   rawJson: string | null
 }
 
-export interface ProgramSummary extends ProgramInput {
+export interface ProgramSummary extends Omit<ProgramInput, 'rawJson'> {
+  /**
+   * Blob de l'API. Absent des listes : il pese plusieurs dizaines de Ko par
+   * programme et aucun ecran de liste ne l'utilise. Seul `getProgram`
+   * (detail) le hydrate.
+   */
+  rawJson?: string | null
   favorite: boolean
   note: string
   tags: string[]
@@ -110,13 +116,35 @@ export interface TagInfo {
   count: number
 }
 
+/**
+ * Colonnes communes. `raw_json` n'est volontairement pas dans cette liste :
+ * c'est le blob complet de l'API, parfois plusieurs dizaines de Ko par
+ * programme, et les listes n'en ont pas besoin. Seul le detail le charge.
+ */
 const PROGRAM_COLUMNS = `
+  p.id, p.handle, p.name, p.type, p.status, p.confidentiality,
+  p.min_bounty_value, p.min_bounty_currency,
+  p.max_bounty_value, p.max_bounty_currency,
+  p.industry, p.web_link, p.following, p.updated_at,
+  COALESCE(f.favorite, 0) AS favorite, COALESCE(f.note, '') AS note
+`
+
+const PROGRAM_DETAIL_COLUMNS = `
   p.id, p.handle, p.name, p.type, p.status, p.confidentiality,
   p.min_bounty_value, p.min_bounty_currency,
   p.max_bounty_value, p.max_bounty_currency,
   p.industry, p.web_link, p.following, p.raw_json, p.updated_at,
   COALESCE(f.favorite, 0) AS favorite, COALESCE(f.note, '') AS note
 `
+
+/**
+ * Echappe les jokers LIKE pour qu'une recherche de "100%" ou "a_b"
+ * cherche litteralement, au lieu de se comporter en joker.
+ */
+function likeContains(raw: string): string {
+  const escaped = raw.replace(/[\\%_]/g, (c) => `\\${c}`)
+  return `%${escaped}%`
+}
 
 interface ProgramRow {
   id: string
@@ -201,16 +229,26 @@ export class Repository {
 
   private loadProgram(id: string): ProgramRow | undefined {
     return this.db
-      .prepare(`SELECT ${PROGRAM_COLUMNS} FROM programs p LEFT JOIN favorites f ON f.program_id = p.id WHERE p.id = ?`)
+      .prepare(`SELECT ${PROGRAM_DETAIL_COLUMNS} FROM programs p LEFT JOIN favorites f ON f.program_id = p.id WHERE p.id = ?`)
       .get(id) as unknown as ProgramRow | undefined
   }
 
-  private tagsByProgram(): Map<string, string[]> {
-    const rows = this.db
-      .prepare(
-        'SELECT pt.program_id AS pid, t.name FROM program_tags pt JOIN tags t ON t.id = pt.tag_id',
-      )
-      .all() as Array<{ pid: string; name: string }>
+  /**
+   * `ids` limite la requete aux programmes affiches. Sans argument on charge
+   * tout (detail unitaire) ; avec la liste des ids de la page courante on
+   * evite de ramener les Tags de thousands de programmes jamais affiches.
+   */
+  private tagsByProgram(ids?: string[]): Map<string, string[]> {
+    const rows = (ids
+      ? this.db
+          .prepare(
+            `SELECT pt.program_id AS pid, t.name FROM program_tags pt JOIN tags t ON t.id = pt.tag_id
+             WHERE pt.program_id IN (${ids.map(() => '?').join(',')})`,
+          )
+          .all(...ids)
+      : this.db
+          .prepare('SELECT pt.program_id AS pid, t.name FROM program_tags pt JOIN tags t ON t.id = pt.tag_id')
+          .all()) as Array<{ pid: string; name: string }>
     const map = new Map<string, string[]>()
     for (const r of rows) {
       const list = map.get(r.pid)
@@ -220,12 +258,17 @@ export class Repository {
     return map
   }
 
-  private groupsByProgram(): Map<string, string[]> {
-    const rows = this.db
-      .prepare(
-        'SELECT gm.program_id AS pid, g.name FROM group_members gm JOIN groups g ON g.id = gm.group_id',
-      )
-      .all() as Array<{ pid: string; name: string }>
+  private groupsByProgram(ids?: string[]): Map<string, string[]> {
+    const rows = (ids
+      ? this.db
+          .prepare(
+            `SELECT gm.program_id AS pid, g.name FROM group_members gm JOIN groups g ON g.id = gm.group_id
+             WHERE gm.program_id IN (${ids.map(() => '?').join(',')})`,
+          )
+          .all(...ids)
+      : this.db
+          .prepare('SELECT gm.program_id AS pid, g.name FROM group_members gm JOIN groups g ON g.id = gm.group_id')
+          .all()) as Array<{ pid: string; name: string }>
     const map = new Map<string, string[]>()
     for (const r of rows) {
       const list = map.get(r.pid)
@@ -254,7 +297,7 @@ export class Repository {
       industry: row.industry,
       webLink: row.web_link ?? null,
       following: row.following === 1,
-      rawJson: row.raw_json,
+      rawJson: row.raw_json ?? null,
       favorite: row.favorite === 1,
       note: row.note,
       tags,
@@ -276,8 +319,10 @@ export class Repository {
       params.push(q.tagId)
     }
     if (q.search && q.search.trim() !== '') {
-      clauses.push('(p.name LIKE ? COLLATE NOCASE OR p.handle LIKE ? COLLATE NOCASE OR p.industry LIKE ? COLLATE NOCASE)')
-      const like = `%${q.search.trim()}%`
+      clauses.push(
+        "(p.name LIKE ? ESCAPE '\\' COLLATE NOCASE OR p.handle LIKE ? ESCAPE '\\' COLLATE NOCASE OR p.industry LIKE ? ESCAPE '\\' COLLATE NOCASE)",
+      )
+      const like = likeContains(q.search.trim())
       params.push(like, like, like)
     }
     return { where: clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '', params }
@@ -313,8 +358,9 @@ export class Repository {
       )
       .all(...params, limit, offset) as unknown as ProgramRow[]
 
-    const tags = this.tagsByProgram()
-    const groups = this.groupsByProgram()
+    const ids = rows.map((r) => r.id)
+    const tags = this.tagsByProgram(ids)
+    const groups = this.groupsByProgram(ids)
     return {
       records: rows.map((r) =>
         this.toSummary(r, tags.get(r.id) ?? [], groups.get(r.id) ?? []),
@@ -545,6 +591,26 @@ export class Repository {
     this.db
       .prepare('INSERT INTO mcp_requests (ts, token_label, tool, args_json, status, ms, remote_ip) VALUES (?, ?, ?, ?, ?, ?, ?)')
       .run(input.ts, input.tokenLabel, input.tool, input.argsJson, input.status, input.ms, input.remoteIp || '')
+    this.pruneMcpRequests(input.ts)
+  }
+
+  /**
+   * Le journal MCP est une aide au diagnostic, pas une archive : chaque appel
+   * est une ligne, donc une session de nuit en genere des dizaines de milliers.
+   * On borne a 30 jours ET a 20 000 lignes, ce qui garantit une taille finie
+   * meme sur une base qui n'aurait jamais ete purgee.
+   */
+  private pruneMcpRequests(now: number): void {
+    const cutoff = now - 30 * 24 * 3600 * 1000
+    this.db.prepare('DELETE FROM mcp_requests WHERE ts < ?').run(cutoff)
+    const info = this.db
+      .prepare(
+        `DELETE FROM mcp_requests WHERE id NOT IN (
+           SELECT id FROM mcp_requests ORDER BY id DESC LIMIT 20000
+         )`,
+      )
+      .run()
+    if (Number(info.changes) > 0) this.db.exec('PRAGMA wal_checkpoint(TRUNCATE);')
   }
 
   listMcpRequests(limit = 100): McpRequestRow[] {

@@ -7,6 +7,11 @@ export function openDatabase(path: string): Db {
   const db = new DatabaseSync(path)
   db.exec('PRAGMA journal_mode = WAL;')
   db.exec('PRAGMA foreign_keys = ON;')
+  // SQLite leve SQLITE_BUSY immediatement par defaut. En WAL avec un scan qui
+  // ecrit en continu, on prefere attendre le verrou plutot que de perdre une
+  // requete de l'interface.
+  db.exec('PRAGMA busy_timeout = 5000;')
+  db.exec('PRAGMA synchronous = NORMAL;')
   migrate(db)
   return db
 }
