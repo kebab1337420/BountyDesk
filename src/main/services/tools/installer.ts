@@ -1,9 +1,11 @@
 import { spawn } from 'node:child_process'
+import { once } from 'node:events'
 import { app } from 'electron'
-import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { copyFileSync, createWriteStream, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import type { ToolEntry } from '../../../shared/ipc'
 import { getTool, TOOL_CATALOG, type ToolDefinition, type ToolInstallationResult } from './catalog'
+import { isChecksumAsset, parseChecksums, safeEqualHex, sha256File } from './integrity'
 import { loadGithubToken } from '../../storage'
 import {
   assetFilterFor,
@@ -75,6 +77,37 @@ function gitPkgPath(id: string): string {
 
 const MARKER = '.bountydesk-installed'
 
+/** Outils en cours d'installation : protege leur dossier des purges residues. */
+const activeInstalls = new Set<string>()
+
+/**
+ * Purge les archives et repertoires temporaires abandonnes par une
+ * installation interrompue (coupure, plantage, fermeture de l'app). Appele au
+ * demarrage : ces residus peuvent peser plusieurs centaines de Mo.
+ */
+export function purgeInstallResidues(): number {
+  let removed = 0
+  let entries: string[]
+  try {
+    entries = readdirSync(toolsDir())
+  } catch {
+    return 0
+  }
+  for (const entry of entries) {
+    const full = join(toolsDir(), entry)
+    const m = /^([a-z0-9._-]+)\.(download\.(?:zip|tar\.gz)|tmp)$/i.exec(entry)
+    if (!m) continue
+    if (activeInstalls.has(m[1]!.toLowerCase())) continue
+    try {
+      rmSync(full, { recursive: true, force: true, maxRetries: 3 })
+      removed++
+    } catch {
+      // Fichier verrouille par un antivirus : on retentera au prochain demarrage.
+    }
+  }
+  return removed
+}
+
 async function rmRetry(dir: string, attempts = 4): Promise<void> {
   for (let i = 0; i < attempts; i++) {
     try {
@@ -90,20 +123,63 @@ async function rmRetry(dir: string, attempts = 4): Promise<void> {
 async function isGitRepoCloned(dest: string): Promise<boolean> {
   if (!existsSync(join(dest, '.git'))) return false
   try {
-    const code = await run('git', ['-C', dest, 'rev-parse', '--verify', 'HEAD'])
-    return code === 0
+  const code = await run('git', ['-C', dest, 'rev-parse', '--verify', 'HEAD'], undefined, DETECT_TIMEOUT_MS)
+      return code === 0
   } catch {
     return false
   }
 }
 
-function run(cmd: string, args: string[], onOutput?: (line: string) => void): Promise<number> {
+const RUN_TIMEOUT_MS = 5 * 60 * 1000
+const DETECT_TIMEOUT_MS = 10 * 1000
+const MAX_ASSET_BYTES = 512 * 1024 * 1024
+/** Code de retour distingue d'un echec : l'appel a depasse son budget de temps. */
+const TIMEOUT_CODE = -2
+
+type Spawn = { cmd: string; args: string[] }
+
+function killOnTimeout(child: ReturnType<typeof spawn>, ms: number): () => boolean {
+  let timedOut = false
+  const timer = setTimeout(() => {
+    timedOut = true
+    child.kill('SIGKILL')
+  }, ms)
+  timer.unref?.()
+  return () => {
+    clearTimeout(timer)
+    return timedOut
+  }
+}
+
+function run(cmd: string, args: string[], onOutput?: (line: string) => void, timeoutMs = RUN_TIMEOUT_MS): Promise<number> {
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, args, { windowsHide: true, shell: false, cwd: toolsDir() })
+    const timedOut = killOnTimeout(child, timeoutMs)
     child.stdout?.on('data', (b: Buffer) => onOutput?.(b.toString()))
     child.stderr?.on('data', (b: Buffer) => onOutput?.(b.toString()))
-    child.on('error', reject)
-    child.on('close', (code) => resolve(code ?? -1))
+    child.on('error', (err) => {
+      timedOut()
+      reject(err)
+    })
+    child.on('close', (code) => resolve(timedOut() ? TIMEOUT_CODE : code ?? -1))
+  })
+}
+
+/** Variante qui capture stdout : sert a resoudre un chemin sans executer la cible. */
+function runCapture({ cmd, args }: Spawn, timeoutMs = DETECT_TIMEOUT_MS): Promise<{ code: number; stdout: string }> {
+  return new Promise((resolve) => {
+    const child = spawn(cmd, args, { windowsHide: true, shell: false, cwd: toolsDir() })
+    const timedOut = killOnTimeout(child, timeoutMs)
+    let stdout = ''
+    child.stdout?.on('data', (b: Buffer) => {
+      stdout += b.toString()
+    })
+    child.stderr?.resume()
+    child.on('error', () => {
+      timedOut()
+      resolve({ code: -1, stdout: '' })
+    })
+    child.on('close', (code) => resolve({ code: timedOut() ? TIMEOUT_CODE : code ?? -1, stdout }))
   })
 }
 
@@ -111,14 +187,27 @@ function platformLabel(): string {
   return releaseTarget()
 }
 
-/** Un outil installé dans le PATH du système est considéré comme présent. */
+/**
+ * Un outil installe dans le PATH du systeme est considere comme present.
+ * On resout le chemin avec where/which au lieu de lancer `--version` : une
+ * simple ouverture de l'onglet Outils ne doit jamais executer un binaire
+ * trouve dans le PATH, qui peut venir d'un dossier utilisateur.
+ */
 async function detectedOnPath(tool: ToolDefinition): Promise<boolean> {
   if (!tool.detectCmd) return false
-  try {
-    return (await run(tool.detectCmd, ['--version'])) === 0
-  } catch {
-    return false
-  }
+  const lookup: Spawn = isWindows()
+    ? { cmd: 'where.exe', args: [tool.detectCmd] }
+    : { cmd: 'which', args: [tool.detectCmd] }
+  const { code, stdout } = await runCapture(lookup)
+  if (code !== 0) return false
+  const first = stdout.split(/\r?\n/).map((l) => l.trim()).find((l) => l.length > 0)
+  if (!first) return false
+  return isAbsolutePath(first)
+}
+
+function isAbsolutePath(p: string): boolean {
+  if (isWindows()) return /^[a-zA-Z]:[\\/]/.test(p) || p.startsWith('\\\\')
+  return p.startsWith('/')
 }
 
 export async function isInstalled(tool: ToolDefinition): Promise<boolean> {
@@ -130,7 +219,7 @@ export async function isInstalled(tool: ToolDefinition): Promise<boolean> {
       // de non-interactif ; l'utilisateur installe l'outil lui-même.
       return false
     }
-    const code = await run('winget', ['list', '--exact', '--id', tool.wingetId])
+    const code = await run('winget', ['list', '--exact', '--id', tool.wingetId], undefined, DETECT_TIMEOUT_MS)
     return code === 0
   }
   if (tool.source === 'github') {
@@ -171,12 +260,36 @@ function githubHeaders(): Record<string, string> {
   return { 'User-Agent': 'BountyDesk/0.1', Authorization: `Bearer ${token}` }
 }
 
+/**
+ * Telecharge un asset GitHub en ecrivant sur disque progressively : on ne
+ * charge jamais l'archive en memoire et on refuse un corps plus gros que la
+ * limite, que l'en-tete content-length soit absent ou menteur.
+ */
 async function downloadToFile(url: string, dest: string): Promise<void> {
   const res = await fetch(url, { headers: githubHeaders() })
   if (!res.ok) throw new Error(`Téléchargement refusé (HTTP ${res.status})`)
   assertGithubAssetUrl(res.url || url)
-  const buf = Buffer.from(await res.arrayBuffer())
-  writeFileSync(dest, buf)
+  const declared = Number(res.headers.get('content-length') ?? 0)
+  if (Number.isFinite(declared) && declared > MAX_ASSET_BYTES) {
+    throw new Error(`Archive refusée : ${Math.round(declared / 1048576)} Mo dépassent la limite`)
+  }
+  if (!res.body) throw new Error('Réponse sans corps')
+  const file = createWriteStream(dest)
+  let total = 0
+  try {
+    for await (const chunk of res.body as AsyncIterable<Uint8Array>) {
+      total += chunk.byteLength
+      if (total > MAX_ASSET_BYTES) throw new Error('Archive refusée : limite de taille dépassée')
+      if (!file.write(chunk)) await once(file, 'drain')
+    }
+  } catch (err) {
+    file.destroy()
+    rmSync(dest, { force: true })
+    throw err
+  }
+  file.end()
+  await once(file, 'close')
+  if (total === 0) throw new Error('Archive vide')
 }
 
 /** @deprecated Utiliser selectReleaseAsset de ./platform. Conservé pour les tests existants. */
@@ -192,7 +305,7 @@ export function selectWindowsAsset(
 async function extractArchive(archive: string, dest: string, onOutput: (line: string) => void): Promise<void> {
   const isZip = /\.zip$/i.test(archive)
   // tar de GNU (Linux) ne gère pas le zip ; bsdtar (Windows 10+) le gère.
-  const attempts: { cmd: string; args: string[] }[] = isZip
+  const attempts: Spawn[] = isZip
     ? [
         { cmd: 'tar', args: ['-xf', archive, '-C', dest] },
         { cmd: 'unzip', args: ['-o', '-q', archive, '-d', dest] }
@@ -207,8 +320,48 @@ async function extractArchive(archive: string, dest: string, onOutput: (line: st
       continue // binaire absent sur cette plateforme
     }
     if (code === 0) return
+    if (code === TIMEOUT_CODE) throw new Error('Extraction interrompue (délai dépassé)')
   }
   throw new Error('Extraction échouée')
+}
+
+/** Telecharge un petit fichier texte (checksums) en plafonnant la taille. */
+async function downloadText(url: string, maxBytes = 1024 * 1024): Promise<string> {
+  const res = await fetch(url, { headers: githubHeaders() })
+  if (!res.ok) throw new Error(`Téléchargement refusé (HTTP ${res.status})`)
+  assertGithubAssetUrl(res.url || url)
+  const buf = Buffer.from(await res.arrayBuffer())
+  if (buf.byteLength > maxBytes) throw new Error('Fichier de sommes de contrôle trop volumineux')
+  return buf.toString('utf8')
+}
+
+/**
+ * Verifie l'archive contre le fichier de sommes de controle de la release.
+ * Si le projet n'en publie pas, on l'annonce franchement plutot que de
+ * pretendre avoir verifie : l'utilisateur decide en connaissance de cause.
+ */
+async function verifyArchive(
+  tool: ToolDefinition,
+  archivePath: string,
+  assetName: string,
+  assets: { name: string; browser_download_url: string }[],
+  onOutput: (line: string) => void
+): Promise<string | null> {
+  const sumAsset = assets.find((a) => isChecksumAsset(a.name))
+  const digest = await sha256File(archivePath)
+  if (!sumAsset) {
+    onOutput(`Aucun fichier de sommes de contrôle dans la release de ${tool.githubRepo} : binaire non vérifié.`)
+    return null
+  }
+  assertGithubAssetUrl(sumAsset.browser_download_url)
+  const sums = parseChecksums(await downloadText(sumAsset.browser_download_url))
+  const expected = sums.get(basename(assetName).toLowerCase())
+  if (!expected) throw new Error(`Somme de contrôle absente de ${sumAsset.name} pour ${assetName}`)
+  if (!safeEqualHex(expected, digest)) {
+    throw new Error(`Somme de contrôle invalide pour ${assetName} : archive refusee.`)
+  }
+  onOutput(`Somme de contrôle vérifiée (SHA-256 ${digest.slice(0, 12)}…).`)
+  return digest
 }
 
 /**
@@ -257,27 +410,35 @@ async function installGithub(tool: ToolDefinition, onOutput: (line: string) => v
   // On nomme le fichier temporaire avec sa vraie extension : tar de GNU dispatche dessus.
   const assetName = new URL(assetUrl).pathname.split('/').pop() ?? `${tool.id}.zip`
   const archivePath = join(toolsDir(), `${tool.id}.download.${/\.zip$/i.test(assetName) ? 'zip' : 'tar.gz'}`)
-  onOutput(`Téléchargement de ${tool.id} (${target})…`)
-  await downloadToFile(assetUrl, archivePath)
-  onOutput('Extraction…')
   const workDir = join(toolsDir(), `${tool.id}.tmp`)
-  rmSync(workDir, { recursive: true, force: true })
-  mkdirSync(workDir, { recursive: true })
-  const wanted = exeCandidates(tool.id, tool.exeName).map((n) => n.toLowerCase())
-  await extractUntilBinary(archivePath, workDir, wanted, onOutput)
+  activeInstalls.add(tool.id)
+  try {
+    onOutput(`Téléchargement de ${tool.id} (${target})…`)
+    await downloadToFile(assetUrl, archivePath)
+    await verifyArchive(tool, archivePath, assetName, body.assets ?? [], onOutput)
+    onOutput('Extraction…')
+    rmSync(workDir, { recursive: true, force: true })
+    mkdirSync(workDir, { recursive: true })
+    const wanted = exeCandidates(tool.id, tool.exeName).map((n) => n.toLowerCase())
+    await extractUntilBinary(archivePath, workDir, wanted, onOutput)
 
-  const found = findFile(workDir, (name) => wanted.includes(name.toLowerCase()))
-  if (!found) throw new Error(`Binaire ${tool.exeName ?? tool.id} introuvable dans l’archive`)
+    const found = findFile(workDir, (name) => wanted.includes(name.toLowerCase()))
+    if (!found) throw new Error(`Binaire ${tool.exeName ?? tool.id} introuvable dans l’archive`)
 
-  const destDir = join(toolsDir(), tool.id)
-  rmSync(destDir, { recursive: true, force: true })
-  mkdirSync(destDir, { recursive: true })
-  const dest = join(destDir, portableBinaryName(tool.id, tool.exeName))
-  copyFileSync(found, dest)
-  makeExecutable(dest)
-  rmSync(archivePath, { force: true })
-  rmSync(workDir, { recursive: true, force: true })
-  onOutput(`Installé : ${basename(dest)}`)
+    const destDir = join(toolsDir(), tool.id)
+    rmSync(destDir, { recursive: true, force: true })
+    mkdirSync(destDir, { recursive: true })
+    const dest = join(destDir, portableBinaryName(tool.id, tool.exeName))
+    copyFileSync(found, dest)
+    makeExecutable(dest)
+    onOutput(`Installé : ${basename(dest)}`)
+  } finally {
+    // Un échec d'extraction ou de vérification ne doit jamais laisser d'archive
+    // à moitié écrite ni derépertoire temporaire derrière lui.
+    rmSync(archivePath, { force: true })
+    rmSync(workDir, { recursive: true, force: true })
+    activeInstalls.delete(tool.id)
+  }
 }
 
 export function findFile(dir: string, match: (name: string) => boolean): string | null {

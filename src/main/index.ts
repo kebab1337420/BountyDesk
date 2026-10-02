@@ -8,6 +8,7 @@ import { registerScanIpc } from './ipc-scan'
 import { registerToolsIpc } from './ipc-tools'
 import { registerMcpIpc, restoreAutostartMcp } from './ipc-mcp'
 import { installSecurity } from './security'
+import { purgeInstallResidues } from './services/tools/installer'
 import { setMainWindow } from './window'
 
 const APP_ID = 'com.bountydesk.app'
@@ -39,6 +40,7 @@ if (!gotLock) {
     registerToolsIpc()
     registerMcpIpc()
     restoreAutostartMcp()
+    purgeInstallResidues()
     mainWindow = createWindow()
 
     app.on('activate', () => {
