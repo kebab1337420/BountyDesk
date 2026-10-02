@@ -615,7 +615,10 @@ export async function startMcpServer(
     const tokens = opts?.tokens && opts.tokens.length > 0 ? [...opts.tokens] : [token]
     currentTokens = tokens
     tokenLabels = opts?.tokenLabels ? new Map(opts.tokenLabels) : new Map()
-    currentLan = opts?.lan === true
+    // Garde unique et non contournable : 0.0.0.0 n'est autorise que sur un
+    // reseau prive. Aucun appelant (y compris un renderer compromis qui
+    // demanderait lan=true) ne peut exposer le serveur sur un reseau public.
+    currentLan = opts?.lan === true && isPrivateNetwork()
     const host = currentLan ? '0.0.0.0' : '127.0.0.1'
     const rawAgents = opts?.agentTokens
     const agentEntries: AgentAuthEntry[] = Array.isArray(rawAgents)

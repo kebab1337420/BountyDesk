@@ -10,6 +10,7 @@ import {
   type AgentTokenAddResult,
   type AgentTokenRevokeResult,
   type AgentTokensResult,
+  type AgentViewTokenResult,
   type DbResult,
   type McpDiagnoseInfo,
   type McpDiagnoseResult,
@@ -44,7 +45,7 @@ import {
   endSessionByViewToken,
   requestSession,
 } from './services/mcp/agents'
-import { openAgentView } from './view'
+import { getViewTokenForSender, openAgentView } from './view'
 import { getMainWindow } from './window'
 
 const DEFAULT_PORT = 8787
@@ -113,7 +114,10 @@ async function linuxFirewallState(port: number): Promise<McpDiagnoseInfo['firewa
   const firewalld = await runCli('firewall-cmd', ['--state']).catch(() => ({ code: -1, stdout: '', stderr: '' }))
   if (firewalld.code === 0) {
     const listed = await runCli('firewall-cmd', ['--list-ports']).catch(() => ({ code: -1, stdout: '', stderr: '' }))
-    return listed.code === 0 && listed.stdout.includes(`${port}/tcp`) ? 'ok' : 'missing'
+    if (listed.code === 0 && listed.stdout.includes(`${port}/tcp`)) return 'ok'
+    // Les regles riches (sources privees) n'apparaissent pas dans --list-ports.
+    const rich = await runCli('firewall-cmd', ['--list-rich-rules']).catch(() => ({ code: -1, stdout: '', stderr: '' }))
+    return rich.code === 0 && rich.stdout.includes(`port=${port}`) ? 'ok' : 'missing'
   }
   return 'unmanaged'
 }
@@ -152,16 +156,74 @@ async function selfTest(): Promise<McpDiagnoseInfo['selfTest']> {
   }
 }
 
-/** Ouvre le port MCP via ufw (polkit) ou firewalld, avec invite d'authentification. */
+function richRule(cidr: string, port: number): string {
+  return `rule family=ipv4 source address=${cidr} port port=${port} protocol=tcp accept`
+}
+
+/** Sources autorisees : uniquement le RFC1918, puisque le mode LAN est refuse hors reseau prive. */
+const PRIVATE_CIDRS = ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16']
+
+/** Script PowerShell eleve (invite UAC), reserve a la creation et au retrait de la regle. */
+function runElevated(script: string): Promise<void> {
+  const encoded = Buffer.from(script, 'utf16le').toString('base64')
+  const ps =
+    'Start-Process -FilePath powershell.exe ' +
+    `-ArgumentList "-NoProfile","-NonInteractive","-WindowStyle","Hidden","-ExecutionPolicy","Bypass","-EncodedCommand","${encoded}" ` +
+    '-Verb RunAs -Wait'
+  return new Promise((resolve, reject) => {
+    execFile(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-Command', ps],
+      { windowsHide: true, timeout: 30000 },
+      (err) => (err ? reject(err) : resolve())
+    )
+  })
+}
+
+/** Ouvre le port MCP sur les seules sources privees, via ufw (polkit) ou firewalld. */
 async function runLinuxFirewallFix(port: number): Promise<{ ok: boolean; error?: string }> {
-  const ufw = await runCli('pkexec', ['ufw', 'allow', `${port}/tcp`, 'comment', FIREWALL_RULE])
-  if (ufw.code === 0) return { ok: true }
-  const fd = await runCli('pkexec', ['firewall-cmd', '--permanent', `--add-port=${port}/tcp`])
-  if (fd.code !== 0) {
-    return { ok: false, error: `Impossible d’ouvrir le port ${port} (ufw ${ufw.code}, firewall-cmd ${fd.code}).` }
+  let ufwOk = true
+  for (const cidr of PRIVATE_CIDRS) {
+    const r = await runCli('pkexec', [
+      'ufw', 'allow', 'proto', 'tcp', 'from', cidr, 'to', 'any', 'port', String(port), 'comment', FIREWALL_RULE
+    ])
+    if (r.code !== 0) ufwOk = false
+  }
+  if (ufwOk) return { ok: true }
+  let fdOk = true
+  for (const cidr of PRIVATE_CIDRS) {
+    const r = await runCli('pkexec', ['firewall-cmd', '--permanent', `--add-rich-rule=${richRule(cidr, port)}`])
+    if (r.code !== 0) fdOk = false
+  }
+  if (!fdOk) {
+    return { ok: false, error: `Impossible d’ouvrir le port ${port} sur les réseaux privés.` }
   }
   await runCli('pkexec', ['firewall-cmd', '--reload'])
   return { ok: true }
+}
+
+/**
+ * Retire la regle pare-feu. Best effort : un UAC refuse ne doit pas empecher la
+ * desactivation du serveur. Sans regle, plus rien n'ecoute de toute facon.
+ */
+async function runFirewallRemove(port: number | null): Promise<void> {
+  try {
+    if (process.platform === 'win32') {
+      await runElevated(`netsh advfirewall firewall delete rule name="${FIREWALL_RULE}"`)
+      return
+    }
+    if (process.platform !== 'linux' || !port) return
+    for (const cidr of PRIVATE_CIDRS) {
+      await runCli('pkexec', [
+        'ufw', 'delete', 'allow', 'proto', 'tcp', 'from', cidr, 'to', 'any', 'port', String(port), 'comment', FIREWALL_RULE
+      ])
+      await runCli('pkexec', ['firewall-cmd', '--permanent', `--remove-rich-rule=${richRule(cidr, port)}`])
+    }
+    await runCli('pkexec', ['firewall-cmd', '--reload'])
+  } catch {
+    // Sans consequence : la regle est limitee au programme, elle n'expose rien
+    // tant que le port n'ecoute pas.
+  }
 }
 
 async function runFirewallFix(): Promise<{ ok: boolean; firewall: McpDiagnoseInfo['firewall']; error?: string }> {
@@ -177,16 +239,11 @@ async function runFirewallFix(): Promise<{ ok: boolean; firewall: McpDiagnoseInf
   const bin = process.execPath
   const script =
     `netsh advfirewall firewall delete rule name="${FIREWALL_RULE}" ; ` +
-    `netsh advfirewall firewall add rule name="${FIREWALL_RULE}" dir=in action=allow program="${bin}" enable=yes profile=any`
-  const encoded = Buffer.from(script, 'utf16le').toString('base64')
-  const ps =
-    'Start-Process -FilePath powershell.exe ' +
-    `-ArgumentList "-NoProfile","-NonInteractive","-WindowStyle","Hidden","-ExecutionPolicy","Bypass","-EncodedCommand","${encoded}" ` +
-    '-Verb RunAs -Wait'
+    // profile=private : la regle ne s'applique que sur un reseau prive, la ou le
+    // mode LAN est autorise. profile=any laissait le port joignable sur un reseau public.
+    `netsh advfirewall firewall add rule name="${FIREWALL_RULE}" dir=in action=allow program="${bin}" enable=yes profile=private`
   try {
-    await new Promise<void>((resolve, reject) => {
-      execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps], { windowsHide: true, timeout: 30000 }, (err) => (err ? reject(err) : resolve()))
-    })
+    await runElevated(script)
   } catch (err) {
     return { ok: false, firewall: 'missing', error: err instanceof Error ? err.message : String(err) }
   }
@@ -282,6 +339,14 @@ export function registerMcpIpc(): void {
           cfg.tokens = [{ id: 'primary', label: 'PC principal', token: generateMcpToken() }]
         }
         const lanOpt = lan ?? cfg.lan
+        if (lanOpt && !isPrivateNetwork()) {
+          return {
+            ok: false,
+            error:
+              'Exposition réseau refusée : le réseau actif n’est pas privé (10/8, 172.16/12, 192.168/16). ' +
+              'BountyDesk n’écoute que sur 127.0.0.1 ici.',
+          }
+        }
         const targetPort = port ?? cfg.port ?? DEFAULT_PORT
         const primary = cfg.tokens[0]!.token
         const started = await startMcpServer(targetPort, primary, {
@@ -294,8 +359,12 @@ export function registerMcpIpc(): void {
         saveMcpConfig({ enabled: true, port: started.port, lan: lanOpt, tokens: cfg.tokens, agents: cfg.agents })
         return { ok: true, status: joinStatus(getMcpStatus()) }
       }
+      const wasRunning = getMcpStatus().running
+      const exposedPort = getMcpStatus().port
       stopMcpServer()
       saveMcpConfig({ enabled: false, port: cfg.port, lan: cfg.lan, tokens: cfg.tokens, agents: cfg.agents })
+      // La regle n'a de sens que tant que le port ecoute : on la retire avec le serveur.
+      if (wasRunning) await runFirewallRemove(exposedPort)
       return { ok: true, status: joinStatus(getMcpStatus()) }
     } catch (err) {
       return handleError(err)
@@ -498,6 +567,14 @@ export function registerMcpIpc(): void {
     } catch (err) {
       return handleError(err)
     }
+  })
+
+  // Le jeton n'est servi qu'a une fenetre de vue que le processus principal a
+  // lui-meme ouverte : la fenetre principale ne l'obtient pas.
+  ipcMain.handle(IPC.AgentViewToken, (event): AgentViewTokenResult => {
+    const token = getViewTokenForSender(event.sender.id)
+    if (!token) return { ok: false, error: 'Cette fenêtre n’est pas une fenêtre de vue distante.' }
+    return { ok: true, token }
   })
 
   ipcMain.handle(IPC.AgentSessionEnd, (_event, raw: unknown): DbResult => {

@@ -113,7 +113,8 @@ Détails qui comptent :
 - Adresse du serveur (locale et LAN) copiable en 1 clic, et un tableau **Activité des IA** journalise chaque appel d'outil (poste, outil, statut, durée).
 - **Outils MCP** : `list_programs`, `get_program_detail`, `list_credentials` (sans secret), `list_tools`, `install_tool`, `start_scan` (mêmes garde-fous que l'UI), `get_scan`, `scan_events`, `run_tool` (exécution *encadrée* d'un binaire du catalogue, whitelist stricte par défaut).
 - Exemple de config `claude_desktop_config.json` / `opencode.json` fourni dans l'app.
-- Pare-feu : l'app vérifie l'état de la règle d'ouverture du port et sait la créer — `netsh` sous Windows, `ufw` / `firewall-cmd` via `pkexec` sous Linux. Sur les autres plateformes, l'état est honestement rapporté « non géré ».
+- Pare-feu : l'app vérifie l'état de la règle d'ouverture du port et sait la créer — `netsh` sous Windows, `ufw` / `firewall-cmd` via `pkexec` sous Linux. Sur les autres plateformes, l'état est honnêtement rapporté « non géré ». La règle est **limitée au réseau privé** (profils `private` sous Windows, sources RFC1918 sous Linux) et **retirée à la désactivation du serveur**.
+- **Le mode LAN n'est accordé que sur un réseau privé** (10/8, 172.16/12, 192.168/16). La vérification est faite dans `startMcpServer` lui-même : aucun appelant ne peut obtenir `0.0.0.0` depuis un café ou un partage public, même en le demandant explicitement.
 
 ### Agent IA (pont Claude Code → BountyDesk)
 - Dossier `agent/` : un **pack prêt à copier** dans un dossier de mission pour donner à Claude Code un workflow encadré (sélection de programmes, vérification ROE avec verdicts *refuse/restreint/légitime*, choix low/med/high, scan puis tri des résultats, brouillon de rapport dans `reports/` — **jamais de soumission**).

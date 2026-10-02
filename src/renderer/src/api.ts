@@ -6,6 +6,7 @@ import type {
   AgentTokenAddResult,
   AgentTokenRevokeResult,
   AgentTokensResult,
+  AgentViewTokenResult,
   AuthStatus,
   AuthValidateResult,
   CredentialInput,
@@ -99,7 +100,7 @@ export const Api = {
     sessionDecide: (sessionId: number, approve: boolean): Promise<AgentSessionDecideResult> =>
       window.bountydesk.agent.sessionDecide(sessionId, approve),
     sessionEnd: (viewToken: string): Promise<DbResult> => window.bountydesk.agent.sessionEnd(viewToken),
-    getViewToken: (): string => window.bountydesk.agent.getViewToken()
+    viewToken: (): Promise<AgentViewTokenResult> => window.bountydesk.agent.viewToken()
   },
   favorites: {
     set: (programId: string, favorite: boolean): Promise<DbResult> =>

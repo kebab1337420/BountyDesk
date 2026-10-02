@@ -3,6 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Defense en profondeur : l'enetre applique la meme CSP en header, mais un
+         chargement qui n'atteint pas onHeadersReceived garderait celle-ci. Les deux
+         politiques s'appliquent en meme temps : la plus stricte gagne, donc en prod le
+         header (connect-src 'none') reste le plafond ; connect-src n'est elargi ici que pour
+         le rechargement a chaud du serveur de dev. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' ws://localhost:*; base-uri 'none'; form-action 'none'; object-src 'none'"
+    />
     <title>BountyDesk</title>
   </head>
   <body>
