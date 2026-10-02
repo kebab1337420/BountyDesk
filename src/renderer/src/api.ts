@@ -12,6 +12,7 @@ import type {
   CredentialInput,
   CredentialSaveResult,
   CredentialsListResult,
+  CredentialRevealResult,
   CreateGroupResult,
   CreateTagResult,
   DbResult,
@@ -33,6 +34,8 @@ import type {
   ScanEventsResult,
   ScanListResult,
   ScanStartResult,
+  SecretCopyKind,
+  SecretCopyResult,
   SyncResult,
   TagInfo,
   ToolInstallResult,
@@ -57,7 +60,11 @@ export const Api = {
     add: (input: CredentialInput): Promise<CredentialSaveResult> => window.bountydesk.credentials.add(input),
     update: (id: number, patch: Partial<CredentialInput>): Promise<DbResult> =>
       window.bountydesk.credentials.update(id, patch),
-    remove: (id: number): Promise<DbResult> => window.bountydesk.credentials.remove(id)
+    remove: (id: number): Promise<DbResult> => window.bountydesk.credentials.remove(id),
+    reveal: (id: number): Promise<CredentialRevealResult> => window.bountydesk.credentials.reveal(id)
+  },
+  secret: {
+    copy: (kind: SecretCopyKind, id?: string): Promise<SecretCopyResult> => window.bountydesk.secret.copy(kind, id)
   },
   shell: {
     openExternal: (url: string): Promise<OpenExternalResult> => window.bountydesk.shell.openExternal(url)

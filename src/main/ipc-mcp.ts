@@ -1,4 +1,4 @@
-import { ipcMain, Notification } from 'electron'
+import { clipboard, ipcMain, Notification } from 'electron'
 import { execFile } from 'node:child_process'
 import { z } from 'zod'
 import {
@@ -7,6 +7,7 @@ import {
   type AgentSessionRequestResult,
   type AgentSessionsResult,
   type AgentStatusesResult,
+  type AgentTokenInfo,
   type AgentTokenAddResult,
   type AgentTokenRevokeResult,
   type AgentTokensResult,
@@ -23,6 +24,7 @@ import {
   type McpTokenAddResult,
   type McpTokenInfo,
   type McpTokenRevokeResult,
+  type SecretCopyResult,
 } from '../shared/ipc'
 import {
   loadMcpConfig,
@@ -34,7 +36,9 @@ import {
   generateMcpToken,
   generateMcpTokenId,
   getMcpStatus,
+  getPrimaryMcpToken,
   isPrivateNetwork,
+  maskToken,
   startMcpServer,
   stopMcpServer,
 } from './services/mcp/server'
@@ -44,6 +48,7 @@ import {
   decideSession,
   endSessionByViewToken,
   requestSession,
+  sessionAgentToken,
 } from './services/mcp/agents'
 import { getViewTokenForSender, openAgentView } from './view'
 import { getMainWindow } from './window'
@@ -58,13 +63,39 @@ function joinStatus(info: McpStatusInfo): McpStatusInfo {
     port: info.port ?? cfg.port,
     lan: cfg.lan,
     hosts: info.hosts,
-    token: cfg.tokens[0]?.token ?? null,
+    masked: maskToken(cfg.tokens[0]?.token),
     tokens: cfg.tokens.map(toTokenInfo),
   }
 }
 
 function toTokenInfo(t: McpToken): McpTokenInfo {
-  return { id: t.id, label: t.label, token: t.token }
+  return { id: t.id, label: t.label, masked: maskToken(t.token) }
+}
+
+function toAgentTokenInfo(t: McpToken): AgentTokenInfo {
+  return { id: t.id, label: t.label, masked: maskToken(t.token) }
+}
+
+/** Contenu exact des extraits de configuration affiches dans Reglages, mais avec le vrai jeton. */
+function snippetHost(info: McpStatusInfo): string {
+  return info.lan && info.hosts.length > 0 ? info.hosts[0]! : '127.0.0.1'
+}
+
+function mcpConfigSnippet(token: string, info: McpStatusInfo, port: number): string {
+  return `{
+  "bountydesk": {
+    "type": "remote",
+    "url": "http://${snippetHost(info)}:${port}/mcp",
+    "headers": {
+      "Authorization": "Bearer ${token}",
+      "Content-Type": "application/json"
+    }
+  }
+}`
+}
+
+function agentConfigSnippet(token: string, info: McpStatusInfo, port: number): string {
+  return `{\n  "server": "${snippetHost(info)}",\n  "port": ${port},\n  "token": "${token}"\n}`
 }
 
 function withLabels(tokens: McpToken[]): Map<string, string> {
@@ -139,7 +170,7 @@ async function firewallState(): Promise<McpDiagnoseInfo['firewall']> {
 async function selfTest(): Promise<McpDiagnoseInfo['selfTest']> {
   const info = getMcpStatus()
   const port = info.port
-  const token = info.token
+  const token = getPrimaryMcpToken()
   if (!info.running || !port || !token) return null
   const start = Date.now()
   try {
@@ -285,7 +316,7 @@ export function registerMcpIpc(): void {
       saveMcpConfig({ enabled: cfg.enabled, port: cfg.port, lan: cfg.lan, tokens, agents: cfg.agents })
       await restartIfRunning({ enabled: cfg.enabled, port: cfg.port, lan: cfg.lan, tokens, agents: cfg.agents })
       const info = getMcpStatus()
-      return { ok: true, token, status: joinStatus(info) }
+      return { ok: true, id: tokens[0]!.id, masked: maskToken(token), status: joinStatus(info) }
     } catch (err) {
       return handleError(err)
     }
@@ -295,11 +326,12 @@ export function registerMcpIpc(): void {
     const { label } = z.object({ label: z.string().trim().min(1).max(60) }).parse(raw)
     try {
       const cfg = loadMcpConfig()
+      const newId = generateMcpTokenId()
       const token = generateMcpToken()
-      const tokens = [...cfg.tokens, { id: generateMcpTokenId(), label, token }]
+      const tokens = [...cfg.tokens, { id: newId, label, token }]
       saveMcpConfig({ enabled: cfg.enabled, port: cfg.port, lan: cfg.lan, tokens, agents: cfg.agents })
       await restartIfRunning({ enabled: cfg.enabled, port: cfg.port, lan: cfg.lan, tokens, agents: cfg.agents })
-      return { ok: true, token, status: joinStatus(getMcpStatus()) }
+      return { ok: true, id: newId, masked: maskToken(token), status: joinStatus(getMcpStatus()) }
     } catch (err) {
       return handleError(err)
     }
@@ -461,7 +493,7 @@ export function registerMcpIpc(): void {
         ok: true,
         port: info.port ?? cfg.port,
         hosts: info.hosts,
-        tokens: cfg.agents.map((t) => ({ id: t.id, label: t.label, token: t.token })),
+        tokens: cfg.agents.map(toAgentTokenInfo),
       }
     } catch (err) {
       return handleError(err)
@@ -472,17 +504,19 @@ export function registerMcpIpc(): void {
     const { label } = z.object({ label: z.string().trim().min(1).max(60) }).parse(raw)
     try {
       const cfg = loadMcpConfig()
+      const newId = generateMcpTokenId()
       const token = generateMcpToken()
-      const agents = [...cfg.agents, { id: generateMcpTokenId(), label, token }]
+      const agents = [...cfg.agents, { id: newId, label, token }]
       saveMcpConfig({ enabled: cfg.enabled, port: cfg.port, lan: cfg.lan, tokens: cfg.tokens, agents })
       await restartIfRunning({ enabled: cfg.enabled, port: cfg.port, lan: cfg.lan, tokens: cfg.tokens, agents })
       const info = getMcpStatus()
       return {
         ok: true,
-        token,
+        id: newId,
+        masked: maskToken(token),
         port: info.port ?? cfg.port,
         hosts: info.hosts,
-        tokens: agents.map((t) => ({ id: t.id, label: t.label, token: t.token })),
+        tokens: agents.map(toAgentTokenInfo),
       }
     } catch (err) {
       return handleError(err)
@@ -504,7 +538,7 @@ export function registerMcpIpc(): void {
         ok: true,
         port: info.port ?? cfg.port,
         hosts: info.hosts,
-        tokens: agents.map((t) => ({ id: t.id, label: t.label, token: t.token })),
+        tokens: agents.map(toAgentTokenInfo),
       }
     } catch (err) {
       return handleError(err)
@@ -559,8 +593,8 @@ export function registerMcpIpc(): void {
       if (!r.ok) return r
       if (approve && r.viewToken) {
         const cfg = loadMcpConfig()
-        const agentToken = r.session.agentToken
-        const label = cfg.agents.find((a) => a.token === agentToken)?.label ?? r.session.agentLabel
+        const row = sessionAgentToken(r.session.id)
+        const label = cfg.agents.find((a) => a.token === row)?.label ?? r.session.agentLabel
         openAgentView(r.viewToken, label || 'PC distant')
       }
       return { ok: true, session: r.session }
@@ -571,6 +605,39 @@ export function registerMcpIpc(): void {
 
   // Le jeton n'est servi qu'a une fenetre de vue que le processus principal a
   // lui-meme ouverte : la fenetre principale ne l'obtient pas.
+  // Copie un secret dans le presse-papier. Le renderer choisit *quel* secret,
+  // jamais son contenu : il ne voit que le masque renvoye par les autres canaux.
+  ipcMain.handle(IPC.SecretCopy, async (_event, raw: unknown): Promise<SecretCopyResult> => {
+    const { kind, id } = z
+      .object({
+        kind: z.enum(['mcpToken', 'agentToken', 'mcpConfig', 'agentConfig']),
+        id: z.string().min(1).max(100).optional(),
+      })
+      .parse(raw)
+    try {
+      const cfg = loadMcpConfig()
+      const info = getMcpStatus()
+      const primary = cfg.tokens[0]?.token
+      const port = info.port ?? cfg.port ?? DEFAULT_PORT
+      let text: string | null = null
+      if (kind === 'mcpToken') {
+        text = cfg.tokens.find((t) => t.id === id)?.token ?? null
+      } else if (kind === 'agentToken') {
+        text = cfg.agents.find((t) => t.id === id)?.token ?? null
+      } else if (kind === 'mcpConfig') {
+        if (primary) text = mcpConfigSnippet(primary, info, port)
+      } else {
+        const agentToken = cfg.agents[0]?.token
+        if (agentToken) text = agentConfigSnippet(agentToken, info, port)
+      }
+      if (!text) return { ok: false, error: 'Aucun jeton à copier pour cette entrée.' }
+      clipboard.writeText(text)
+      return { ok: true }
+    } catch (err) {
+      return handleError(err)
+    }
+  })
+
   ipcMain.handle(IPC.AgentViewToken, (event): AgentViewTokenResult => {
     const token = getViewTokenForSender(event.sender.id)
     if (!token) return { ok: false, error: 'Cette fenêtre n’est pas une fenêtre de vue distante.' }
