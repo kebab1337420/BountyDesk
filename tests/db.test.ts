@@ -161,6 +161,68 @@ describe('Repository', () => {
     expect(page.records.map((r) => r.name)).toEqual(['Prog 3', 'Prog 4'])
   })
 
+  it('traite les jokers LIKE de la recherche comme des caractères littéraux', () => {
+    repo.upsertProgram(sample({ id: 'p-1', handle: 'h1', name: 'Remise 100%' }))
+    repo.upsertProgram(sample({ id: 'p-2', handle: 'h2', name: 'Remise 1000' }))
+    repo.upsertProgram(sample({ id: 'p-3', handle: 'h3', name: 'Nom_avec_underscore' }))
+    repo.upsertProgram(sample({ id: 'p-4', handle: 'h4', name: 'NomXavecXunderscore' }))
+
+    // Sans echappement, "100%" matcherait "1000" (le % devient un joker).
+    expect(repo.listPrograms({ search: '100%' }).records.map((r) => r.id)).toEqual(['p-1'])
+    // Sans echappement, "a_b" matcherait "aXbXb..." comme le joker _.
+    expect(repo.listPrograms({ search: 'Nom_avec' }).records.map((r) => r.id)).toEqual(['p-3'])
+    // Le joker echappe reste utilisable en recherche normale.
+    expect(repo.listPrograms({ search: 'Remise' }).total).toBe(2)
+  })
+
+  it('n\'expédie pas raw_json dans les listes mais le fournit dans le détail', () => {
+    repo.upsertProgram(sample({ rawJson: JSON.stringify({ heavy: 'x'.repeat(500) }) }))
+
+    const listed = repo.listPrograms().records[0]!
+    expect(listed.rawJson).toBeNull()
+
+    const detail = repo.getProgram('prog-1')!
+    expect(detail.rawJson).toContain('heavy')
+  })
+
+  it('ne charge tags et groups que pour la page affichée', () => {
+    for (let i = 1; i <= 6; i += 1) {
+      repo.upsertProgram(sample({ id: `p-${i}`, handle: `h${i}`, name: `Prog ${i}` }))
+    }
+    const tag = repo.createTag('api')
+    for (const id of ['p-1', 'p-5']) repo.addTagToProgram(id, tag.id)
+
+    const page = repo.listPrograms({ limit: 2, offset: 0, sort: 'name', dir: 'asc' })
+    expect(page.records.map((r) => r.id)).toEqual(['p-1', 'p-2'])
+    // p-1 est dans la page : son tag est charge. Les tags des autres
+    // programmes de la base n'ont pas de effet sur la page.
+    expect(page.records[0]!.tags).toEqual(['api'])
+    expect(page.records[1]!.tags).toEqual([])
+  })
+
+  it('applique busy_timeout et cree les index de tri/recherche', () => {
+    const busy = db.prepare('PRAGMA busy_timeout').get() as unknown as { timeout: number }
+    expect(busy.timeout).toBe(5000)
+
+    const version = db.prepare('SELECT user_version FROM pragma_user_version').get() as unknown as { user_version: number }
+    expect(version.user_version).toBe(7)
+
+    const indexes = (db.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all() as unknown as Array<{ name: string }>).map((i) => i.name)
+    expect(indexes).toContain('idx_programs_name_nocase')
+    expect(indexes).toContain('idx_programs_handle_nocase')
+    expect(indexes).toContain('idx_programs_updated_at')
+  })
+
+  it('borne le journal MCP : purge au-dela de 30 jours et de 20 000 lignes', () => {
+    const now = Date.now()
+    repo.appendMcpRequest({ ts: now - 40 * 24 * 3600 * 1000, tokenLabel: 'vieux', tool: 'list_programs', argsJson: '{}', status: 'ok', ms: 3, remoteIp: '' })
+    repo.appendMcpRequest({ ts: now, tokenLabel: 'pc', tool: 'list_programs', argsJson: '{}', status: 'ok', ms: 3, remoteIp: '192.168.2.133' })
+
+    const rows = repo.listMcpRequests(100)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.token_label).toBe('pc')
+  })
+
   it('maintient les métadonnées locales après une resync (upsert n’écrase pas favoris/notes)', () => {
     repo.upsertProgram(sample())
     repo.setFavorite('prog-1', true)

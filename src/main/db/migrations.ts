@@ -162,4 +162,16 @@ export const migrations: Migration[] = [
       `)
     },
   },
+  {
+    version: 7,
+    up(db) {
+      // Tri et recherche de la liste de programmes : le tri par defaut est
+      // "name COLLATE NOCASE", la recherche porte sur name/handle/industry.
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_programs_name_nocase ON programs(name COLLATE NOCASE);
+        CREATE INDEX IF NOT EXISTS idx_programs_handle_nocase ON programs(handle COLLATE NOCASE);
+        CREATE INDEX IF NOT EXISTS idx_programs_updated_at ON programs(updated_at DESC);
+      `)
+    },
+  },
 ]
