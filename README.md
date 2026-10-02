@@ -103,6 +103,12 @@ Le catalogue compte **277 entrées** réparties en six catégories (`recon`, `en
 
 Détails qui comptent :
 
+- **Vérification d'intégrité** : chaque archive GitHub est hachée en SHA-256 puis comparée au fichier de sommes de la release (`checksums.txt`, `SHA256SUMS`…) quand le projet en publie un. Écart ou ligne manquante = installation refusée. Quand le projet ne publie rien, l'app l'affiche clairement plutôt que de laisser croire à une vérification.
+- **Téléchargement borné** : les assets sont écrits sur disque en streaming avec un plafond de 512 Mo — jamais de `arrayBuffer()` en mémoire, et l'en-tête `content-length` n'est pas cru sur parole.
+- **Aucun binaire exécuté pour détecter** : l'onglet Outils résout l'emplacement dans le PATH via `where`/`which` au lieu de lancer `--version`. Ouvrir l'onglet ne déclenche donc aucune exécution d'un binaire trouvé dans le PATH (qui peut venir d'un dossier utilisateur).
+- **Timeouts** : toute commande d'installation/extraction a un budget de 5 min, la détection 10 s. Un `git clone` bloqué ne fige plus l'app.
+- **Purge au démarrage** : archives `.download.*` et dossiers `.tmp` laissés par une installation interrompue sont supprimés au lancement.
+
 - **Détection d'abord** : avant toute installation, BountyDesk cherche le binaire dans le `PATH` (via le champ `detectCmd`). Installer un outil déjà présent est sans effet, et les noms diffèrent entre plateformes (`ripgrep`→`rg`, `bat`→`batcat`, `fd`→`fdfind`, `wireshark`→`tshark`, `powershell`→`pwsh`…).
 - **Portables multi-plateformes** : pour chaque binaire GitHub, l'asset de release est choisi en fonction de la plateforme hôte (nom du binaire sans extension sous Linux, suffixe `.exe` sous Windows, `chmod +x` à l'installation). Un asset ambigu ou absent produit une erreur explicite, jamais un faux « installé ».
 - **Outils signalés non disponibles** : 23 entrées sont marquées Windows-only (Sysinternals, PowerToys, Windows Terminal…) et 29 sont des applications graphiques ; l'app refuse de tenter une installation qui n'a pas de sens sur la plateforme, avec une explication.
