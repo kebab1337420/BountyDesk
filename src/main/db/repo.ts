@@ -450,6 +450,14 @@ export class Repository {
       .all(programId) as unknown as CredentialRow[]
   }
 
+  getCredential(id: number): CredentialRow | undefined {
+    return this.db
+      .prepare(
+        'SELECT id, program_id, label, username, secret_enc, note, created_at, updated_at FROM credentials WHERE id = ?',
+      )
+      .get(id) as unknown as CredentialRow | undefined
+  }
+
   createCredential(input: { programId: string; label: string; username: string; secretEnc: string; note: string }): number {
     const info = this.db
       .prepare(

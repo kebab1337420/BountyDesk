@@ -25,10 +25,16 @@ export function listCredentials(programId: string): CredentialRecord[] {
     programId: c.program_id,
     label: c.label,
     username: c.username,
-    secret: decrypt(c.secret_enc),
+    hasSecret: c.secret_enc !== '',
     note: c.note,
     updatedAt: c.updated_at,
   }))
+}
+
+/** Dechiffre un secret a la demande, pour la seule ligne que l'utilisateur a choisi de reveler. */
+export function revealCredentialSecret(id: number): string {
+  const row = getRepository().getCredential(id)
+  return row ? decrypt(row.secret_enc) : ''
 }
 
 export function addCredential(input: CredentialInput): number {

@@ -412,6 +412,17 @@ export function generateMcpTokenId(): string {
   return randomBytes(6).toString('hex')
 }
 
+/** Representation non reversible d'un jeton : les 4 derniers caracteres suffisent a le distinguer. */
+export function maskToken(token: string | null | undefined): string {
+  if (!token) return ''
+  return `••••••••${token.slice(-4)}`
+}
+
+/** Jeton en clair, pour le processus principal uniquement (jamais renvoye au renderer). */
+export function getPrimaryMcpToken(): string | null {
+  return currentTokens[0] ?? null
+}
+
 export function getMcpStatus(): McpStatusInfo {
   return {
     enabled: false,
@@ -419,8 +430,8 @@ export function getMcpStatus(): McpStatusInfo {
     port: currentPort,
     lan: currentLan,
     hosts: localHosts(),
-    token: currentTokens[0] ?? null,
-    tokens: currentTokens.map((t) => ({ id: labelFor(t) || '?', label: labelFor(t) || 'PC', token: t })),
+    masked: maskToken(currentTokens[0]),
+    tokens: currentTokens.map((t) => ({ id: labelFor(t) || '?', label: labelFor(t) || 'PC', masked: maskToken(t) })),
   }
 }
 

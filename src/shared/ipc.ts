@@ -22,6 +22,7 @@ export const IPC = {
   CredentialsAdd: 'credentials:add',
   CredentialsUpdate: 'credentials:update',
   CredentialsRemove: 'credentials:remove',
+  CredentialsReveal: 'credentials:reveal',
   OpenExternal: 'shell:openExternal',
   ScanStart: 'scan:start',
   ScanList: 'scan:list',
@@ -49,7 +50,8 @@ export const IPC = {
   AgentSessionRequest: 'agent:sessionRequest',
   AgentSessionDecide: 'agent:sessionDecide',
   AgentSessionEnd: 'agent:sessionEnd',
-  AgentViewToken: 'agent:viewToken'
+  AgentViewToken: 'agent:viewToken',
+  SecretCopy: 'secret:copy'
 } as const
 
 export interface AuthStatus {
@@ -164,7 +166,7 @@ export interface CredentialRecord {
   programId: string
   label: string
   username: string
-  secret: string
+  hasSecret: boolean
   note: string
   updatedAt: number
 }
@@ -230,10 +232,14 @@ export type GitHubTokenStatusResult = { ok: true; configured: boolean } | DbFail
 
 export type GitHubTokenSetResult = { ok: true } | DbFail
 
+/**
+ * Les jetons ne traversent jamais IPC en clair : le renderer recoit un
+ * masque, et la copie se fait dans le processus principal.
+ */
 export interface McpTokenInfo {
   id: string
   label: string
-  token: string
+  masked: string
 }
 
 export interface McpStatusInfo {
@@ -242,15 +248,15 @@ export interface McpStatusInfo {
   port: number | null
   lan: boolean
   hosts: string[]
-  token: string | null
+  masked: string
   tokens: McpTokenInfo[]
 }
 
 export type McpSetEnabledResult = { ok: true; status: McpStatusInfo } | DbFail
 
-export type McpRegenerateResult = { ok: true; token: string; status: McpStatusInfo } | DbFail
+export type McpRegenerateResult = { ok: true; id: string; masked: string; status: McpStatusInfo } | DbFail
 
-export type McpTokenAddResult = { ok: true; token: string; status: McpStatusInfo } | DbFail
+export type McpTokenAddResult = { ok: true; id: string; masked: string; status: McpStatusInfo } | DbFail
 
 export type McpTokenRevokeResult = { ok: true; status: McpStatusInfo } | DbFail
 
@@ -295,7 +301,7 @@ export type McpFirewallFixResult = { ok: true; firewall: McpFirewallState } | Db
 export interface AgentTokenInfo {
   id: string
   label: string
-  token: string
+  masked: string
 }
 
 export interface AgentStatusInfo {
@@ -312,7 +318,6 @@ export interface AgentStatusInfo {
 
 export interface RemoteSessionInfo {
   id: number
-  agentToken: string
   agentLabel: string
   remoteIp: string
   status: 'pending' | 'active' | 'refused' | 'ended'
@@ -326,7 +331,7 @@ export interface RemoteSessionInfo {
 export type AgentTokensResult = { ok: true; port: number | null; hosts: string[]; tokens: AgentTokenInfo[] } | DbFail
 
 export type AgentTokenAddResult =
-  | { ok: true; token: string; port: number | null; hosts: string[]; tokens: AgentTokenInfo[] }
+  | { ok: true; id: string; masked: string; port: number | null; hosts: string[]; tokens: AgentTokenInfo[] }
   | DbFail
 
 export type AgentTokenRevokeResult = { ok: true; port: number | null; hosts: string[]; tokens: AgentTokenInfo[] } | DbFail
@@ -340,6 +345,17 @@ export type AgentSessionRequestResult = { ok: true; session: RemoteSessionInfo |
 export type AgentSessionDecideResult = { ok: true; session: RemoteSessionInfo } | DbFail
 
 export type AgentViewTokenResult = { ok: true; token: string } | DbFail
+
+/**
+ * Copie un secret dans le presse-papier depuis le processus principal.
+ * Le renderer ne peut choisir que *quel* secret copier, jamais une valeur
+ * arbitraire : c'est lui qui connait le contenu, le renderer ne le voit pas.
+ */
+export type SecretCopyKind = 'mcpToken' | 'agentToken' | 'mcpConfig' | 'agentConfig'
+
+export type SecretCopyResult = { ok: true } | DbFail
+
+export type CredentialRevealResult = { ok: true; secret: string } | DbFail
 
 export interface BountyDeskBridge {
   auth: {
@@ -357,6 +373,10 @@ export interface BountyDeskBridge {
     add(input: CredentialInput): Promise<CredentialSaveResult>
     update(id: number, patch: Partial<CredentialInput>): Promise<DbResult>
     remove(id: number): Promise<DbResult>
+    reveal(id: number): Promise<CredentialRevealResult>
+  }
+  secret: {
+    copy(kind: SecretCopyKind, id?: string): Promise<SecretCopyResult>
   }
   shell: {
     openExternal(url: string): Promise<OpenExternalResult>

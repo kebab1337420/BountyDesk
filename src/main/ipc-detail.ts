@@ -4,7 +4,13 @@ import { IPC } from '../shared/ipc'
 import { getRepository } from './db'
 import { getClient } from './app-state'
 import { fetchProgramDetail, getCachedProgramDetail } from './services/program-detail'
-import { addCredential, listCredentials, removeCredential, updateCredentialPatch } from './services/credentials'
+import {
+  addCredential,
+  listCredentials,
+  removeCredential,
+  revealCredentialSecret,
+  updateCredentialPatch,
+} from './services/credentials'
 
 const programIdSchema = z.string().min(1).max(200)
 const credentialIdSchema = z.number().int().positive()
@@ -42,6 +48,16 @@ export function registerDetailIpc(): void {
     const programId = programIdSchema.parse(rawId)
     try {
       return { ok: true, credentials: listCredentials(programId) } as const
+    } catch (err) {
+      return dbResultError(err)
+    }
+  })
+
+  // Le secret n'est renvoye que pour la ligne que l'utilisateur a choisi de reveler.
+  ipcMain.handle(IPC.CredentialsReveal, (_event, rawId) => {
+    const id = z.number().int().min(1).parse(rawId)
+    try {
+      return { ok: true, secret: revealCredentialSecret(id) } as const
     } catch (err) {
       return dbResultError(err)
     }

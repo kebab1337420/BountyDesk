@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import { IPC, type BountyDeskBridge } from '../shared/ipc'
+import { IPC, type BountyDeskBridge, type SecretCopyKind } from '../shared/ipc'
 
 const bridge: BountyDeskBridge = {
   auth: {
@@ -17,6 +17,10 @@ const bridge: BountyDeskBridge = {
     add: (input) => ipcRenderer.invoke(IPC.CredentialsAdd, input),
     update: (id: number, patch) => ipcRenderer.invoke(IPC.CredentialsUpdate, { id, patch }),
     remove: (id: number) => ipcRenderer.invoke(IPC.CredentialsRemove, id),
+    reveal: (id: number) => ipcRenderer.invoke(IPC.CredentialsReveal, id),
+  },
+  secret: {
+    copy: (kind: SecretCopyKind, id?: string) => ipcRenderer.invoke(IPC.SecretCopy, { kind, id }),
   },
   shell: {
     openExternal: (url: string) => ipcRenderer.invoke(IPC.OpenExternal, url),

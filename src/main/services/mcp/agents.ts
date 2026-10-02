@@ -65,10 +65,16 @@ function rowFor(sessionId: number): RemoteSessionRow | undefined {
   }
 }
 
+/** Jeton bearer de l'agent ayant demande cette session, cote main uniquement. */
+export function sessionAgentToken(sessionId: number): string | null {
+  return rowFor(sessionId)?.agent_token ?? null
+}
+
+// Le jeton bearer de l'agent reste cote main : le renderer n'en a aucun besoin
+// et le lire lui donnerait un acces direct aux machines d'intrusion enrolées.
 function toSessionInfo(row: RemoteSessionRow): RemoteSessionInfo {
   return {
     id: row.id,
-    agentToken: row.agent_token,
     agentLabel: row.agent_label,
     remoteIp: row.remote_ip,
     status: row.status as RemoteSessionInfo['status'],

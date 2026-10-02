@@ -7,7 +7,8 @@ import type {
   McpMachineInfo,
   McpRequestRow,
   McpStatusInfo,
-  RemoteSessionInfo
+  RemoteSessionInfo,
+  SecretCopyKind
 } from '../../../shared/ipc'
 
 interface Props {
@@ -104,6 +105,20 @@ export function SettingsScreen({ onLogout }: Props) {
 
   const copy = async (text: string, key: string) => {
     await navigator.clipboard.writeText(text)
+    setCopied(key)
+    setTimeout(() => setCopied(null), 1500)
+  }
+
+  /**
+   * Les jetons ne vivent jamais dans le renderer : c'est le processus principal
+   * qui écrit dans le presse-papier, le renderer ne voit qu'un masque.
+   */
+  const copySecret = async (kind: SecretCopyKind, id: string | undefined, key: string): Promise<void> => {
+    const r = await Api.secret.copy(kind, id)
+    if (!r.ok) {
+      setError(r.error)
+      return
+    }
     setCopied(key)
     setTimeout(() => setCopied(null), 1500)
   }
@@ -238,7 +253,7 @@ export function SettingsScreen({ onLogout }: Props) {
       }
       setAgentNewLabel('')
       await loadAgentTokens()
-      await copy(res.token, `agent-${res.token.slice(0, 6)}`)
+      await copySecret('agentToken', res.id, `agent-${res.masked}`)
     })
 
   const revokeAgentToken = (id: string, label: string) =>
@@ -261,15 +276,16 @@ export function SettingsScreen({ onLogout }: Props) {
         : { color: '#34d399' }
   }
 
+  // Extrait affiche sans le jeton : le bouton « Copier la config » demande au
+  // processus principal de copier la version complete.
   const configSnippet = () => {
     const host = mcp?.lan && mcp.hosts.length > 0 ? mcp.hosts[0]! : '127.0.0.1'
-    const token = mcp?.tokens[0]?.token ?? '<TOKEN>'
     return `{
   "bountydesk": {
     "type": "remote",
     "url": "${baseUrl(host)}",
     "headers": {
-      "Authorization": "Bearer ${token}",
+      "Authorization": "Bearer <JETON>",
       "Content-Type": "application/json"
     }
   }
@@ -545,10 +561,10 @@ export function SettingsScreen({ onLogout }: Props) {
                       <div className="cred-row" key={t.id}>
                         <div className="cred-main">
                           <span className="cred-label">{t.label}</span>
-                          <code className="mcp-token-value">{t.token}</code>
+                          <code className="mcp-token-value">{t.masked}</code>
                         </div>
                         <div className="cred-actions">
-                          <button className="icon-btn" title="Copier le jeton" onClick={() => void copy(t.token, `agtok-${t.id}`)}>
+                          <button className="icon-btn" title="Copier le jeton" onClick={() => void copySecret('agentToken', t.id, `agtok-${t.id}`)}>
                             {copied === `agtok-${t.id}` ? '✓' : '⧉'}
                           </button>
                           <button className="icon-btn danger" title="Révoquer" onClick={() => void revokeAgentToken(t.id, t.label)}>
@@ -573,7 +589,12 @@ export function SettingsScreen({ onLogout }: Props) {
                     <p className="muted-text">
                       Copiez le jeton et créez un <code>config.json</code> à côté de l'exe agent :
                     </p>
-                    <pre>{`{\n  "server": "${mcp?.lan && mcp.hosts.length > 0 ? mcp.hosts[0]! : '127.0.0.1'}",\n  "port": ${mcp?.port ?? 8787},\n  "token": "${agentTokens[0]?.token ?? '<TOKEN>'}"\n}`}</pre>
+                    <pre>{`{\n  "server": "${mcp?.lan && mcp.hosts.length > 0 ? mcp.hosts[0]! : '127.0.0.1'}",\n  "port": ${mcp?.port ?? 8787},\n  "token": "<JETON>"\n}`}</pre>
+                    <div className="mcp-row">
+                      <button className="btn ghost small" onClick={() => void copySecret('agentConfig', undefined, 'cfg-agent')}>
+                        {copied === 'cfg-agent' ? 'Copié ✓' : 'Copier la config'}
+                      </button>
+                    </div>
                   </details>
                   <button className="btn ghost small" disabled={busy} onClick={() => void Promise.all([loadAgents(), loadSession()])} style={{ marginTop: 8 }}>
                     Actualiser
@@ -617,10 +638,10 @@ export function SettingsScreen({ onLogout }: Props) {
                     <div className="cred-row" key={t.id}>
                       <div className="cred-main">
                         <span className="cred-label">{t.label}</span>
-                        <code className="mcp-token-value">{t.token}</code>
+                        <code className="mcp-token-value">{t.masked}</code>
                       </div>
                       <div className="cred-actions">
-                        <button className="icon-btn" title="Copier le jeton" onClick={() => void copy(t.token, `tok-${t.id}`)}>
+                        <button className="icon-btn" title="Copier le jeton" onClick={() => void copySecret('mcpToken', t.id, `tok-${t.id}`)}>
                           {copied === `tok-${t.id}` ? '✓' : '⧉'}
                         </button>
                         <button className="icon-btn danger" title="Révoquer le jeton" onClick={() => void revoke(t.id, t.label)}>
@@ -660,7 +681,7 @@ export function SettingsScreen({ onLogout }: Props) {
                   </p>
                   <div className="mcp-row">
                     <pre>{configSnippet()}</pre>
-                    <button className="btn ghost small" onClick={() => void copy(configSnippet(), 'cfg')}>
+                    <button className="btn ghost small" onClick={() => void copySecret('mcpConfig', undefined, 'cfg')}>
                       {copied === 'cfg' ? 'Copié ✓' : 'Copier la config'}
                     </button>
                   </div>

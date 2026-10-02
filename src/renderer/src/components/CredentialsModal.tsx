@@ -23,7 +23,9 @@ export function CredentialsModal({ program, onClose }: Props) {
   const [busy, setBusy] = useState(false)
   const [editing, setEditing] = useState<number | null>(null)
   const [draft, setDraft] = useState<Draft>(empty)
-  const [revealed, setRevealed] = useState<Set<number>>(new Set())
+  // Secrets reveles a la demande : la liste ne transporte que le booleen
+  // « a un secret », le dechiffrement n'arrive que pour la ligne demandee.
+  const [revealed, setRevealed] = useState<Record<number, string>>({})
 
   const load = async (): Promise<void> => {
     try {
@@ -93,16 +95,31 @@ export function CredentialsModal({ program, onClose }: Props) {
     }
   }
 
+  const reveal = async (id: number): Promise<string | null> => {
+    const r = await Api.credentials.reveal(id)
+    if (!r.ok) {
+      setError(r.error)
+      return null
+    }
+    setRevealed((prev) => ({ ...prev, [id]: r.secret }))
+    return r.secret
+  }
+
   const toggleReveal = (id: number): void => {
-    setRevealed((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else {
-        next.clear()
-        next.add(id)
-      }
-      return next
-    })
+    if (revealed[id] !== undefined) {
+      setRevealed((prev) => {
+        const next = { ...prev }
+        delete next[id]
+        return next
+      })
+      return
+    }
+    void reveal(id)
+  }
+
+  const copySecret = async (id: number): Promise<void> => {
+    const secret = revealed[id] !== undefined ? revealed[id] : await reveal(id)
+    if (secret) await copy(secret)
   }
 
   return (
@@ -115,8 +132,11 @@ export function CredentialsModal({ program, onClose }: Props) {
             <div className="cred-main">
               <span className="cred-label">{c.label}</span>
               {c.username && <code className="cred-user">{c.username}</code>}
-              <code className="cred-secret">{revealed.has(c.id) || !c.secret ? '••••••••' : ''}</code>
-              {revealed.has(c.id) && c.secret && <code className="cred-secret">{c.secret}</code>}
+              {c.hasSecret && (
+                <code className="cred-secret">
+                  {revealed[c.id] !== undefined ? revealed[c.id] : '••••••••'}
+                </code>
+              )}
               {c.note && <span className="muted">{c.note}</span>}
             </div>
             <div className="cred-actions">
@@ -125,17 +145,17 @@ export function CredentialsModal({ program, onClose }: Props) {
                   ⧉
                 </button>
               )}
-              {c.secret && (
+              {c.hasSecret && (
                 <button
                   className="icon-btn"
-                  title={revealed.has(c.id) ? 'Masquer' : 'Afficher'}
+                  title={revealed[c.id] !== undefined ? 'Masquer' : 'Afficher'}
                   onClick={() => toggleReveal(c.id)}
                 >
                   👁
                 </button>
               )}
-              {c.secret && (
-                <button className="icon-btn" title="Copier le secret" onClick={() => void copy(c.secret)}>
+              {c.hasSecret && (
+                <button className="icon-btn" title="Copier le secret" onClick={() => void copySecret(c.id)}>
                   🔑
                 </button>
               )}

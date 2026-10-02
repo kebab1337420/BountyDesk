@@ -110,6 +110,7 @@ Détails qui comptent :
 
 ### MCP (IA)
 - Écran **Réglages → IA** : activer un serveur MCP HTTP (port défaut `8787`), exposable **sur le réseau local (LAN)** pour piloter BountyDesk depuis plusieurs PC, avec **un jeton nommé par PC/IA** (jetons chiffrés, révocation en 1 clic, jamais listés dans le README ni les logs).
+- **Aucun secret ne traverse le pont vers l'interface** : les jetons MCP et d'agent sont affichés masqués (`••••••••1234`), le bouton « Copier » fait écrire dans le presse-papier par le processus principal, et les extraits de configuration affichent `<JETON>`. Même règle pour les mots de passe enregistrés : la liste ne contient qu'un booléen « a un secret », le déchiffrement n'arrive que pour la ligne dont l'utilisateur demande la révélation.
 - Adresse du serveur (locale et LAN) copiable en 1 clic, et un tableau **Activité des IA** journalise chaque appel d'outil (poste, outil, statut, durée).
 - **Outils MCP** : `list_programs`, `get_program_detail`, `list_credentials` (sans secret), `list_tools`, `install_tool`, `start_scan` (mêmes garde-fous que l'UI), `get_scan`, `scan_events`, `run_tool` (exécution *encadrée* d'un binaire du catalogue, whitelist stricte par défaut).
 - Exemple de config `claude_desktop_config.json` / `opencode.json` fourni dans l'app.
