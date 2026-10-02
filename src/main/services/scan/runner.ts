@@ -7,6 +7,9 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 
 export type ScanEventLevel = 'info' | 'ok' | 'warn' | 'err'
 
+/** `done` : l'outil a tourné. `missing` : binaire absent. `timeout` : plafond atteint. */
+type StepOutcome = 'done' | 'missing' | 'timeout'
+
 const runners = new Map<number, ScanRunner>()
 
 export function getRunner(scanId: number): ScanRunner | undefined {
@@ -40,27 +43,80 @@ function binary(tool: string): string {
   return resolveBinary(tool) ?? tool
 }
 
-function toolExists(tool: string): Promise<boolean> {
-  return new Promise((resolve) => {
-    try {
-      const child = spawn(binary(tool), ['--version'], { windowsHide: true, stdio: 'ignore', shell: false })
-      child.on('error', () => resolve(false))
-      child.on('spawn', () => {
-        child.kill()
-        resolve(true)
+/**
+ * Un outil de reconnaissance ne rend pas la main de lui-même : ffuf attend sur
+ * stdin, nuclei peut boucler sur une cible, et un binaire planté ne se termine
+ * jamais. Sans plafond, le scan reste « en cours » indéfiniment et l.stop() ne
+ * libère rien. 30 min par etape : au-delà, l'outil est considéré bloqué.
+ */
+const STEP_TIMEOUT_MS = 30 * 60 * 1000
+
+/** Plafond d'événements conservés par scan : un outil bavard ne sature pas la base. */
+const MAX_EVENTS = 5000
+
+/**
+ * Tue l'outil *et* sa descendance. ffuf, nuclei et httpx lancent des
+ * sous-processus ; tuer seulement le pid direct laisserait un scan orphelin
+ * continuer le travail sans contrôle ni arrêt possible.
+ */
+function killTree(child: ChildProcessWithoutNullStreams): void {
+  const pid = child.pid
+  if (pid === undefined) return
+  if (process.platform === 'win32') {
+    // taskkill /TJoine l'arbre de processus ; on garde le repli direct.
+    spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore', shell: false })
+      .on('error', () => {
+        try {
+          child.kill('SIGKILL')
+        } catch {
+          /* deja mort */
+        }
       })
+    return
+  }
+  // detached: true fait de l'enfant le meneur de son groupe : le pid negatif
+  // cible le groupe entier.
+  try {
+    process.kill(-pid, 'SIGTERM')
+  } catch {
+    try {
+      child.kill('SIGTERM')
     } catch {
-      resolve(false)
+      /* deja mort */
     }
-  })
+  }
+  // Escalade si l'outil ignore SIGTERM.
+  setTimeout(() => {
+    try {
+      process.kill(-pid, 'SIGKILL')
+    } catch {
+      /* groupe deja disparu */
+    }
+  }, 3000).unref()
+}
+
+export interface ScanRunnerOptions {
+  /** Plafond d'une étape de scan, en ms. */
+  stepTimeoutMs?: number
+  /** Plafond d'événements conservés sur toute la durée du scan. */
+  maxEvents?: number
 }
 
 export class ScanRunner {
   private current: ChildProcessWithoutNullStreams | null = null
   private stopped = false
   private seq = 0
+  private eventCount = 0
+  private suppressed = 0
+  private readonly stepTimeoutMs: number
+  private readonly maxEvents: number
 
-  constructor(private readonly scanId: number) {
+  constructor(
+    private readonly scanId: number,
+    options: ScanRunnerOptions = {}
+  ) {
+    this.stepTimeoutMs = options.stepTimeoutMs ?? STEP_TIMEOUT_MS
+    this.maxEvents = options.maxEvents ?? MAX_EVENTS
     runners.set(scanId, this)
   }
 
@@ -72,7 +128,7 @@ export class ScanRunner {
     this.stopped = true
     if (this.current && !this.current.killed) {
       try {
-        this.current.kill()
+        killTree(this.current)
       } catch {
         /* ignore */
       }
@@ -80,8 +136,30 @@ export class ScanRunner {
   }
 
   private log(level: ScanEventLevel, message: string): void {
+    if (this.eventCount >= this.maxEvents) {
+      this.suppressed += 1
+      return
+    }
+    this.eventCount += 1
     this.seq += 1
     getRepository().appendScanEvent(this.scanId, this.seq, level, message, Date.now())
+  }
+
+  /**
+   * Les lignes jetées au-delà du plafond sont annoncées une fois, à la fin :
+   * sans cela, un scan tronqué passerait pour un scan propre.
+   */
+  private flushSuppressed(): void {
+    if (this.suppressed === 0) return
+    this.seq += 1
+    this.suppressed = 0
+    getRepository().appendScanEvent(
+      this.scanId,
+      this.seq,
+      'warn',
+      `Flux tronqué : lignes ignorées au-delà du plafond de ${this.maxEvents} événements.`,
+      Date.now()
+    )
   }
 
   async run(plan: ScanPlan): Promise<void> {
@@ -93,6 +171,7 @@ export class ScanRunner {
       const intervalMs = Math.max(50, Math.round(1000 / Math.max(1, plan.rateLimit)))
 
       const missingTools = new Set<string>()
+      const timedOutTools = new Set<string>()
       let ranTools = 0
       for (const step of plan.steps) {
         if (this.stopped) break
@@ -102,7 +181,9 @@ export class ScanRunner {
             const args = step.args.map((a) => (a === 'MISSING_WORDLIST' ? wl : a))
             this.log('info', `${step.tool} ${step.hint} (wordlist ${wl})`)
             if (this.stopped) break
-            await this.runStep(step.tool, args)
+            const wlOutcome = await this.runStep(step.tool, args)
+            if (wlOutcome === 'missing') missingTools.add(step.tool)
+            else if (wlOutcome === 'timeout') timedOutTools.add(step.tool)
             if (this.stopped) break
             await sleep(intervalMs)
             continue
@@ -112,10 +193,12 @@ export class ScanRunner {
         }
         this.log('info', `${step.tool} ${step.hint}`)
         if (this.stopped) break
-        const ok = await this.runStep(step.tool, step.args)
-        if (!ok) {
+        const outcome = await this.runStep(step.tool, step.args)
+        if (outcome === 'missing') {
           this.log('warn', `${step.tool}: binaire introuvable, étape ignorée`)
           missingTools.add(step.tool)
+        } else if (outcome === 'timeout') {
+          timedOutTools.add(step.tool)
         } else {
           ranTools += 1
         }
@@ -126,16 +209,30 @@ export class ScanRunner {
       if (this.stopped) {
         this.log('warn', 'Scan interrompu par l’utilisateur')
         repo.updateScan(this.scanId, { status: 'stopped', finishedAt: Date.now() })
-      } else if (ranTools === 0 && missingTools.size > 0) {
+      } else if (ranTools === 0 && (missingTools.size > 0 || timedOutTools.size > 0)) {
         // Ne jamais annoncer « terminé » quand aucun binaire n'a pu être lancé :
         // l'utilisateur croirait avoir scanné alors que rien n'a tourné.
-        this.log(
-          'err',
-          `Aucun outil n’a pu être lancé (${[...missingTools].join(', ')}). Installez-les depuis l’écran Outils, puis relancez le scan.`
-        )
+        if (missingTools.size > 0) {
+          this.log(
+            'err',
+            `Aucun outil n’a pu être lancé (${[...missingTools].join(', ')}). Installez-les depuis l’écran Outils, puis relancez le scan.`
+          )
+        } else {
+          this.log(
+            'err',
+            `Aucun outil n’a rendu de résultat avant le plafond de ${Math.round(this.stepTimeoutMs / 1000)} s (${[...timedOutTools].join(', ')}).`
+          )
+        }
         repo.updateScan(this.scanId, { status: 'error', finishedAt: Date.now() })
-      } else if (missingTools.size > 0) {
-        this.log('warn', `Scan terminé, mais ${missingTools.size} outil(s) absent(s) : ${[...missingTools].join(', ')}`)
+      } else if (missingTools.size > 0 || timedOutTools.size > 0) {
+        const notes: string[] = []
+        if (missingTools.size > 0) {
+          notes.push(`${missingTools.size} outil(s) absent(s) : ${[...missingTools].join(', ')}`)
+        }
+        if (timedOutTools.size > 0) {
+          notes.push(`${timedOutTools.size} étape(s) arrêtées au plafond de ${Math.round(this.stepTimeoutMs / 1000)} s : ${[...timedOutTools].join(', ')}`)
+        }
+        this.log('warn', `Scan terminé, mais ${notes.join(' ; ')}`)
         repo.updateScan(this.scanId, { status: 'done', finishedAt: Date.now() })
       } else {
         this.log('ok', 'Scan terminé')
@@ -145,21 +242,36 @@ export class ScanRunner {
       this.log('err', `Erreur du moteur: ${err instanceof Error ? err.message : String(err)}`)
       repo.updateScan(this.scanId, { status: 'error', finishedAt: Date.now() })
     } finally {
+      this.flushSuppressed()
       runners.delete(this.scanId)
     }
   }
 
-  private runStep(tool: string, args: string[]): Promise<boolean> {
+  private runStep(tool: string, args: string[]): Promise<StepOutcome> {
     return new Promise((resolve) => {
       let child: ChildProcessWithoutNullStreams
       try {
-        child = spawn(binary(tool), args, { windowsHide: true, shell: false })
+        // detached: true place l'outil dans son propre groupe de processus,
+        // ce qui rend l'arrêt de toute sa descendance possible (cf. killTree).
+        child = spawn(binary(tool), args, { windowsHide: true, shell: false, detached: true })
       } catch {
-        resolve(false)
+        resolve('missing')
         return
       }
       this.current = child
       let existed = false
+      let timedOut = false
+      const timer = setTimeout(() => {
+        timedOut = true
+        this.log('warn', `${tool}: délai de ${Math.round(this.stepTimeoutMs / 1000)} s dépassé, étape arrêtée`)
+        killTree(child)
+      }, this.stepTimeoutMs)
+      timer.unref()
+      const settle = (outcome: StepOutcome) => {
+        clearTimeout(timer)
+        if (this.current === child) this.current = null
+        resolve(outcome)
+      }
       child.on('spawn', () => {
         existed = true
       })
@@ -172,21 +284,21 @@ export class ScanRunner {
         if (line) this.log('info', line.slice(0, 2000))
       })
       child.on('error', () => {
-        this.current = null
-        resolve(existed || false)
+        if (!timedOut) this.log('warn', `${tool}: lancement impossible`)
+        settle(existed ? (timedOut ? 'timeout' : 'done') : 'missing')
       })
       child.on('exit', (code, signal) => {
-        this.current = null
         if (code !== null) this.log('info', `(${tool} exit ${code})`)
         else if (signal) this.log('warn', `(${tool} interrompu: ${signal})`)
-        resolve(true)
+        // Un exit obtenu après le plafond est un arrêt, pas un résultat.
+        settle(timedOut ? 'timeout' : 'done')
       })
     })
   }
 }
 
-export async function startScan(scanId: number, plan: ScanPlan): Promise<void> {
+export async function startScan(scanId: number, plan: ScanPlan, options?: ScanRunnerOptions): Promise<void> {
   let runner = getRunner(scanId)
-  if (!runner) runner = new ScanRunner(scanId)
+  if (!runner) runner = new ScanRunner(scanId, options)
   await runner.run(plan)
 }
