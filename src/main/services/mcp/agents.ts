@@ -271,9 +271,20 @@ function attachViewer(ws: WebSocket, link: { sessionId: number; agentToken: stri
   })
 }
 
+// Le jeton voyage en en-tête `Authorization: Bearer` : jamais dans l'URL,
+// donc jamais dans un journal, un proxy ou l'historique. L'ancien format
+// `?token=` reste accepte pour les binaires deja deployes.
+function bearerToken(header: unknown): string | null {
+  if (typeof header !== 'string') return null
+  const prefix = 'Bearer '
+  if (!header.startsWith(prefix)) return null
+  const value = header.slice(prefix.length).trim()
+  return value.length > 0 ? value : null
+}
+
 function upgrade(req: IncomingMessage, socket: import('node:stream').Duplex, head: Buffer): void {
   const url = new URL(req.url ?? '/', 'http://127.0.0.1')
-  const token = url.searchParams.get('token') ?? ''
+  const token = bearerToken(req.headers.authorization) ?? url.searchParams.get('token') ?? ''
   if (url.pathname === '/agent') {
     const auth = agentAuth.find((a) => a.token === token)
     if (!auth) {
