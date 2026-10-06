@@ -559,9 +559,10 @@ async fn main() -> anyhow::Result<()> {
 
     let mut backoff = Duration::from_secs(1);
     loop {
-        let url = format!("ws://{}:{}/agent?token={}", cfg.server, cfg.port, cfg.token);
+        let base_url = format!("ws://{}:{}/agent", cfg.server, cfg.port);
         let connected = connect_once(
-            &url,
+            &base_url,
+            &cfg.token,
             &hostname,
             sw,
             sh,
@@ -589,7 +590,8 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn connect_once(
-    url: &str,
+    base_url: &str,
+    token: &str,
     hostname: &str,
     sw: i32,
     sh: i32,
@@ -601,8 +603,10 @@ async fn connect_once(
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 
-    let request = url.into_client_request()?;
-    log_msg(&format!("connexion {url}"));
+    let mut request = base_url.into_client_request()?;
+    let headers = request.headers_mut();
+    headers.insert("Authorization", format!("Bearer {token}").parse()?);
+    log_msg(&format!("connexion {base_url}"));
     let (mut ws, _) = tokio_tungstenite::connect_async(request).await?;
 
     let hello = serde_json::json!({ "type": "hello", "hostname": hostname });

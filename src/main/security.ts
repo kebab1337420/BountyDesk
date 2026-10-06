@@ -1,4 +1,36 @@
 import { app, session, shell } from 'electron'
+import { join, sep } from 'path'
+import { fileURLToPath } from 'url'
+
+/**
+ * Dossier renderer servi en file:// une fois empaquete. Seule cette arborescence
+ * est une destination de navigation legitime : le preload est attache a toute
+ * page chargee par la webContents, donc un fichier local arbitraire recupererait
+ * le pont `bountydesk` et avec lui run_tool / credentials / open_browser.
+ */
+function rendererRoot(): string {
+  return join(__dirname, '../renderer')
+}
+
+/**
+ * La forme `startsWith(base)` laisse passer `http://localhost:5173.evil.com` :
+ * il faut le slash final pour que le test porte sur un sous-chemin reel.
+ */
+function isTrustedNavigation(rawUrl: string): boolean {
+  const devServerUrl = process.env['ELECTRON_RENDERER_URL']
+  if (devServerUrl) {
+    const base = devServerUrl.endsWith('/') ? devServerUrl : devServerUrl + '/'
+    return rawUrl === devServerUrl || rawUrl.startsWith(base)
+  }
+  if (!rawUrl.startsWith('file://')) return false
+  try {
+    const target = fileURLToPath(rawUrl)
+    const root = rendererRoot()
+    return target === root || target.startsWith(root + sep)
+  } catch {
+    return false
+  }
+}
 
 const PROD_CSP = [
   "default-src 'self'",
@@ -49,8 +81,7 @@ export function installSecurity(): void {
     })
 
     contents.on('will-navigate', (event, url) => {
-      const allowed = devServerUrl ? url.startsWith(devServerUrl) : url.startsWith('file://')
-      if (!allowed) {
+      if (!isTrustedNavigation(url)) {
         event.preventDefault()
       }
     })

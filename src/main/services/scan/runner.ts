@@ -108,6 +108,10 @@ export class ScanRunner {
   private seq = 0
   private eventCount = 0
   private suppressed = 0
+  /** Événements en attente d'écriture : on n'ouvre une transaction que par lot. */
+  private pending: { seq: number; level: string; message: string; ts: number }[] = []
+  private flushTimer: ReturnType<typeof setTimeout> | null = null
+  private closed = false
   private readonly stepTimeoutMs: number
   private readonly maxEvents: number
 
@@ -142,7 +146,34 @@ export class ScanRunner {
     }
     this.eventCount += 1
     this.seq += 1
-    getRepository().appendScanEvent(this.scanId, this.seq, level, message, Date.now())
+    this.pending.push({ seq: this.seq, level, message, ts: Date.now() })
+    if (this.pending.length >= 50 || this.closed) this.flushEvents()
+    else if (!this.flushTimer) {
+      this.flushTimer = setTimeout(() => this.flushEvents(), 200)
+      this.flushTimer.unref()
+    }
+  }
+
+  private flushEvents(): void {
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer)
+      this.flushTimer = null
+    }
+    if (this.pending.length === 0) return
+    const rows = this.pending
+    this.pending = []
+    getRepository().appendScanEvents(this.scanId, rows)
+  }
+
+  /** Un chunk réseau n'est pas une ligne : on ne journalise qu'aux retours à la ligne. */
+  private emitLines(tail: string, chunk: Buffer): string {
+    const parts = (tail + chunk.toString()).split(/\r?\n/)
+    const rest = parts.pop() ?? ''
+    for (const part of parts) {
+      const line = part.trim()
+      if (line) this.log('info', line.slice(0, 2000))
+    }
+    return rest
   }
 
   /**
@@ -206,6 +237,12 @@ export class ScanRunner {
         await sleep(intervalMs)
       }
 
+      // On passe en écriture immédiate avant toute mise à jour du statut :
+      // l'interface cesse de poller dès qu'elle voit un statut final, un lot
+      // restant serait perdu à l'écran (il resterait en base).
+      this.closed = true
+      this.flushEvents()
+
       if (this.stopped) {
         this.log('warn', 'Scan interrompu par l’utilisateur')
         repo.updateScan(this.scanId, { status: 'stopped', finishedAt: Date.now() })
@@ -242,6 +279,8 @@ export class ScanRunner {
       this.log('err', `Erreur du moteur: ${err instanceof Error ? err.message : String(err)}`)
       repo.updateScan(this.scanId, { status: 'error', finishedAt: Date.now() })
     } finally {
+      this.closed = true
+      this.flushEvents()
       this.flushSuppressed()
       runners.delete(this.scanId)
     }
@@ -267,8 +306,19 @@ export class ScanRunner {
         killTree(child)
       }, this.stepTimeoutMs)
       timer.unref()
+      let outTail = ''
+      let errTail = ''
+      const flushTails = (): void => {
+        for (const tail of [errTail, outTail]) {
+          const line = tail.trim()
+          if (line) this.log('info', line.slice(0, 2000))
+        }
+        outTail = ''
+        errTail = ''
+      }
       const settle = (outcome: StepOutcome) => {
         clearTimeout(timer)
+        flushTails()
         if (this.current === child) this.current = null
         resolve(outcome)
       }
@@ -276,12 +326,10 @@ export class ScanRunner {
         existed = true
       })
       child.stderr.on('data', (d: Buffer) => {
-        const line = d.toString().trim()
-        if (line) this.log('info', line.slice(0, 2000))
+        errTail = this.emitLines(errTail, d)
       })
       child.stdout.on('data', (d: Buffer) => {
-        const line = d.toString().trim()
-        if (line) this.log('info', line.slice(0, 2000))
+        outTail = this.emitLines(outTail, d)
       })
       child.on('error', () => {
         if (!timedOut) this.log('warn', `${tool}: lancement impossible`)

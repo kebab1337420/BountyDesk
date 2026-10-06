@@ -22,7 +22,25 @@ export function ToolsScreen() {
   const [error, setError] = useState('')
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [installState, setInstallState] = useState<Record<string, InstallState>>({})
-  const [installing, setInstalling] = useState<string | null>(null)
+  const runningIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const [id, st] of Object.entries(installState)) if (st.status === 'running') ids.add(id)
+    return ids
+  }, [installState])
+  const installing = runningIds.size > 0
+
+  // La sortie d'installation arrive en continu : elle s'accumule tant que
+  // l'outil tourne, puis le résultat final du handler prend le relais.
+  useEffect(() => {
+    const off = Api.tools.onInstallOutput(({ id, line }) => {
+      setInstallState((prev) => {
+        const st = prev[id]
+        if (!st || st.status !== 'running') return prev
+        return { ...prev, [id]: { ...st, output: st.output + line } }
+      })
+    })
+    return off
+  }, [])
   const [busy, setBusy] = useState(false)
   const [search, setSearch] = useState('')
   const [onlyInstalled, setOnlyInstalled] = useState(false)
@@ -82,10 +100,21 @@ export function ToolsScreen() {
   }
 
   const installSelection = async () => {
-    if (pendingIds.length === 0) return
-    setInstalling(pendingIds[0] ?? null)
+    if (pendingIds.length === 0 || installing) return
+    const sourceOf = new Map<string, string>()
+    for (const t of tools ?? []) sourceOf.set(t.id, t.source)
+    // winget/apt verrouillent leur base : une seule installation système à la
+    // fois, sinon elle échoue sur le verrou. Tout le reste (téléchargements
+    // GitHub, clonages, venvs uv) mérite le parallélisme — sinon les
+    // téléchargements patientent derrière le verrou des gestionnaires.
+    const systemLane: string[] = []
+    const downloadLane: string[] = []
     for (const id of pendingIds) {
-      setInstalling(id)
+      if (sourceOf.get(id) === 'winget') systemLane.push(id)
+      else downloadLane.push(id)
+    }
+
+    const runOne = async (id: string): Promise<void> => {
       setInstallState((prev) => ({ ...prev, [id]: { status: 'running', output: '', error: '' } }))
       const res = await Api.tools.install(id)
       setInstallState((prev) => ({
@@ -93,13 +122,28 @@ export function ToolsScreen() {
         [id]:
           res.ok && res.installed
             ? { status: 'ok', output: res.output, error: '' }
-            : { status: 'error', output: res.output, error: res.ok ? 'Installed ratio' : res.error }
+            : {
+                status: 'error',
+                output: res.output,
+                error: res.ok ? 'Binaire non détecté après installation.' : res.error
+              }
       }))
-      if (res.ok && res.installed) {
-        await load()
-      }
     }
-    setInstalling(null)
+
+    const lane = (ids: string[], width: number): Promise<void> => {
+      const queue = [...ids]
+      const worker = async (): Promise<void> => {
+        for (;;) {
+          const id = queue.shift()
+          if (!id) return
+          await runOne(id)
+        }
+      }
+      return Promise.all(Array.from({ length: Math.min(width, queue.length) }, worker)).then(() => undefined)
+    }
+
+    await Promise.all([lane(systemLane, 1), lane(downloadLane, 4)])
+    await load()
   }
 
   const byCategory = useMemo(() => {
@@ -131,18 +175,20 @@ export function ToolsScreen() {
       <div className="section-header">
         <h2>Outils ⚒</h2>
         <div className="toolbar-actions">
-          <button className="btn ghost small" onClick={() => void load()} disabled={installing !== null}>
+          <button className="btn ghost small" onClick={() => void load()} disabled={installing}>
             Actualiser
           </button>
-          <button className="btn ghost small" onClick={toggleSelectAll} disabled={installing !== null}>
+          <button className="btn ghost small" onClick={toggleSelectAll} disabled={installing}>
             {allSelected ? 'Tout désélectionner' : 'Tout sélectionner'}
           </button>
           <button
             className="btn primary"
-            disabled={installing !== null || pendingIds.length === 0}
+            disabled={installing || pendingIds.length === 0}
             onClick={() => void installSelection()}
           >
-            {installing ? `Installation de ${installing}…` : `Installer la sélection (${pendingIds.length})`}
+            {installing
+              ? `Installation en cours (${runningIds.size})…`
+              : `Installer la sélection (${pendingIds.length})`}
           </button>
         </div>
       </div>
@@ -259,7 +305,7 @@ export function ToolsScreen() {
               <h4 className="tools-cat">{cat.label}</h4>
               {items.map((tool) => {
                 const st = installState[tool.id]
-                const running = installing === tool.id
+                const running = runningIds.has(tool.id)
                 return (
                   <div className="tool-row" key={tool.id}>
                     <label className="tool-main">

@@ -10,6 +10,7 @@ import { dirname, join } from 'path'
  * locale (fichier 0600 dans userData) pour chiffrer en AES-256-GCM. C'est moins
  * fort qu'un keyring système (la clé est sur le même disque que le secret), mais
  * c'est strictement mieux que de refuser de fonctionner.
+ * Remarque : privilégier un keyring système quand disponible.
  */
 const FALLBACK_PREFIX = 'aesgcm.v1.'
 const FALLBACK_SALT = 'bountydesk-secret-v1'

@@ -1,4 +1,5 @@
 import { app, BrowserWindow } from 'electron'
+import { existsSync } from 'node:fs'
 import { join } from 'path'
 import { restoreToken } from './app-state'
 import { registerIpc } from './ipc'
@@ -7,6 +8,7 @@ import { registerDetailIpc } from './ipc-detail'
 import { registerScanIpc } from './ipc-scan'
 import { registerToolsIpc } from './ipc-tools'
 import { registerMcpIpc, restoreAutostartMcp } from './ipc-mcp'
+import { registerBrowserIpc } from './ipc-browser'
 import { installSecurity } from './security'
 import { purgeInstallResidues } from './services/tools/installer'
 import { setMainWindow } from './window'
@@ -40,6 +42,7 @@ if (!gotLock) {
     registerToolsIpc()
     registerMcpIpc()
     restoreAutostartMcp()
+    registerBrowserIpc()
     purgeInstallResidues()
     mainWindow = createWindow()
 
@@ -58,8 +61,11 @@ if (!gotLock) {
 }
 
 function createWindow(): BrowserWindow {
+  // En dev l'icône vient du dépôt ; empaquetée elle est portée par l'exécutable.
+  const windowIcon = join(app.getAppPath(), 'build', 'icon.ico')
   const window = new BrowserWindow({
     title: 'BountyDesk',
+    icon: existsSync(windowIcon) ? windowIcon : undefined,
     width: 1120,
     height: 760,
     minWidth: 960,

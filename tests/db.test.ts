@@ -234,4 +234,26 @@ describe('Repository', () => {
     expect(rec?.favorite).toBe(true)
     expect(rec?.note).toBe('note locale')
   })
+
+  it('écrit un lot d’événements de scan en une seule transaction', () => {
+    repo.upsertProgram(sample())
+    const scanId = repo.createScan({ programId: 'prog-1', depth: 'quick', rateLimit: 10, roeConfirm: true })
+    const rows = Array.from({ length: 3 }, (_, i) => ({
+      seq: i + 1,
+      level: 'info',
+      message: `ligne ${i + 1}`,
+      ts: 1000 + i,
+    }))
+    repo.appendScanEvents(scanId, rows)
+    expect(repo.countScanEvents(scanId)).toBe(3)
+    expect(repo.listScanEvents(scanId, 0).map((r) => r.message)).toEqual(['ligne 1', 'ligne 2', 'ligne 3'])
+    expect(repo.listScanEvents(scanId, 1).map((r) => r.seq)).toEqual([2, 3])
+  })
+
+  it('ignore un lot vide sans toucher au journal', () => {
+    repo.upsertProgram(sample())
+    const scanId = repo.createScan({ programId: 'prog-1', depth: 'quick', rateLimit: 10, roeConfirm: true })
+    repo.appendScanEvents(scanId, [])
+    expect(repo.countScanEvents(scanId)).toBe(0)
+  })
 })

@@ -14,7 +14,8 @@ function decrypt(enc: string): string {
   if (!safeStorage.isEncryptionAvailable()) return ''
   try {
     return safeStorage.decryptString(Buffer.from(enc.slice(4), 'base64'))
-  } catch {
+  } catch (err) {
+    console.error('Échec de déchiffrement du credential:', err)
     return ''
   }
 }

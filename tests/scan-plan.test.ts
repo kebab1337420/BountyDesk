@@ -45,6 +45,24 @@ describe('selectTargets', () => {
     expect(targets).toEqual(['https://scan.example.com'])
   })
 
+  it('écarte les loopback IPv6 et les adresses mappées (hostname rendu entre crochets)', () => {
+    const scope: ScopeDomain[] = [
+      d({ endpoint: 'http://[::1]/' }),
+      d({ endpoint: 'http://[::ffff:127.0.0.1]/' }),
+      d({ endpoint: 'http://[::ffff:a00:1]/' }),
+      d({ endpoint: 'http://localhost./' }),
+      d({ endpoint: 'https://100.64.1.1/' }),
+      d({ endpoint: 'https://scan.example.com/' }),
+    ]
+    expect(selectTargets(scope)).toEqual(['https://scan.example.com'])
+  })
+
+  it('ne bloque pas les IPv6 publiques', () => {
+    expect(selectTargets([d({ endpoint: 'https://[2606:4700::1111]/' })])).toEqual([
+      'https://[2606:4700::1111]',
+    ])
+  })
+
   it('applique le user-agent et le header de requête des ROE au plan', () => {
     const plan = buildPlan('med', ['https://a.example.com'], 5, {
       userAgent: 'BotDE/1.0',

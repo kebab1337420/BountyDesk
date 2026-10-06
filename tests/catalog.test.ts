@@ -12,17 +12,42 @@ describe('catalogue d’outils', () => {
     )
   })
 
-  it('winget ont un wingetId, github un repo + asset, git un repo', () => {
+  it('winget ont un wingetId, github un repo + asset, git un repo, pip une distribution', () => {
     for (const t of TOOL_CATALOG) {
       if (t.source === 'winget') {
         expect(t.wingetId).toBeTruthy()
+        expect(t.githubRepo).toBeUndefined()
       } else if (t.source === 'github') {
         expect(t.githubRepo).toBeTruthy()
         expect(t.githubAsset).toBeTruthy()
+        expect(t.pipPackage).toBeUndefined()
+      } else if (t.source === 'pip') {
+        expect(t.pipPackage).toBeTruthy()
+        expect(t.githubRepo).toBeUndefined()
+        expect(t.githubAsset).toBeUndefined()
+        expect(t.wingetId).toBeUndefined()
       } else {
         expect(t.githubRepo).toBeTruthy()
         expect(t.githubAsset).toBeUndefined()
+        expect(t.pipPackage).toBeUndefined()
       }
+    }
+  })
+
+  it('les outils pip installez un venv isolé et un binaire résoluble', () => {
+    const pip = TOOL_CATALOG.filter((t) => t.source === 'pip')
+    expect(pip.length).toBeGreaterThanOrEqual(4)
+    const dists = pip.map((t) => t.pipPackage!)
+    expect(new Set(dists).size, 'distribution PyPI dupliquée').toBe(dists.length)
+    for (const t of pip) {
+      // Le script console vit sous .venv : son nom par défaut est l'id, il doit
+      // donc être un nom de fichier et un identifiant accepté par resolveBinary.
+      expect(t.id, `id ${t.id} invalide pour resolveBinary`).toMatch(/^[a-z0-9][a-z0-9._-]{0,59}$/i)
+      expect(t.exeName ?? t.id).toMatch(/^[A-Za-z0-9._-]+$/)
+    }
+    // Noms de distributions vérifiés sur pypi.org/pypi/<name>/json
+    for (const t of pip) {
+      expect(['waymore', 'uro', 'h8mail', 'git-dumper']).toContain(t.pipPackage)
     }
   })
 

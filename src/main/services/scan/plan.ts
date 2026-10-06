@@ -20,13 +20,30 @@ export interface ScanPlan {
 
 export const MAX_TARGETS = 200
 
-function isPrivateHost(host: string): boolean {
-  const h = host.toLowerCase()
+/** Traduit ::ffff:ABCD:EF00 en notation pointee, sinon null. */
+function hexV4ToDotted(part: string): string | null {
+  const groups = part.split(':')
+  if (groups.length !== 2) return null
+  const hi = Number.parseInt(groups[0]!, 16)
+  const lo = Number.parseInt(groups[1]!, 16)
+  if (!Number.isFinite(hi) || !Number.isFinite(lo)) return null
+  return `${hi >> 8}.${hi & 0xff}.${lo >> 8}.${lo & 0xff}`
+}
+
+function isPrivateHost(rawHost: string): boolean {
+  // new URL() laisse les crochets autour des IPv6 et peut garder un point final.
+  const h = rawHost.replace(/^\[/, '').replace(/\]$/, '').replace(/\.$/, '').toLowerCase()
   if (h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.internal')) return true
   if (isIP(h) === 0) return false
   if (h.includes(':')) {
-    const c = h.toLowerCase()
-    return c === '::1' || c.startsWith('fc') || c.startsWith('fd') || c.startsWith('fe80')
+    if (h === '::1' || h === '::') return true
+    const mapped = h.match(/^::ffff:(.+)$/)
+    if (mapped) {
+      const rest = mapped[1]!
+      const dotted = rest.includes('.') ? rest : hexV4ToDotted(rest)
+      return dotted ? isPrivateHost(dotted) : true // forme inconnue : on bloque
+    }
+    return h.startsWith('fc') || h.startsWith('fd') || h.startsWith('fe80')
   }
   const parts = h.split('.').map((x) => Number(x))
   const a = parts[0] ?? 0
@@ -35,6 +52,7 @@ function isPrivateHost(host: string): boolean {
     a === 10 ||
     a === 127 ||
     a === 0 ||
+    (a === 100 && b >= 64 && b <= 127) ||
     (a === 172 && b >= 16 && b <= 31) ||
     (a === 192 && b === 168) ||
     (a === 169 && b === 254)
