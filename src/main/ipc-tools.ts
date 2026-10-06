@@ -1,5 +1,5 @@
 import { ipcMain } from 'electron'
-import { IPC, type DbResult, type GitHubTokenSetResult, type GitHubTokenStatusResult, type ToolInstallResult, type ToolsListResult } from '../shared/ipc'
+import { IPC, type DbResult, type GitHubTokenSetResult, type GitHubTokenStatusResult, type ToolInstallOutput, type ToolInstallResult, type ToolsListResult } from '../shared/ipc'
 import { clearGithubToken, loadGithubToken, saveGithubToken } from './storage'
 import { currentTools, installTool } from './services/tools/installer'
 
@@ -46,7 +46,15 @@ export function registerToolsIpc(): void {
       return { ok: false, error: 'Identifiant d’outil invalide', output: '' }
     }
     const chunks: string[] = []
-    const out = (line: string) => chunks.push(line)
+    // Sortie poussée au fil de l'eau : sans elle, l'utilisateur ne voit rien
+    // pendant plusieurs minutes et croit l'installation bloquée.
+    const out = (line: string) => {
+      chunks.push(line)
+      const wc = event.sender
+      if (wc.isDestroyed()) return
+      const payload: ToolInstallOutput = { id, line }
+      wc.send(IPC.ToolsInstallOutput, payload)
+    }
     const res = await installTool(id, out)
     if (res.ok) return { ok: true, installed: res.installed, output: chunks.join('') }
     return { ok: false, error: res.error, output: chunks.join('') }

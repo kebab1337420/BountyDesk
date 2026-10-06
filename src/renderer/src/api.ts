@@ -38,6 +38,7 @@ import type {
   SecretCopyResult,
   SyncResult,
   TagInfo,
+  ToolInstallOutput,
   ToolInstallResult,
   ToolsListResult,
   GitHubTokenStatusResult,
@@ -67,7 +68,8 @@ export const Api = {
     copy: (kind: SecretCopyKind, id?: string): Promise<SecretCopyResult> => window.bountydesk.secret.copy(kind, id)
   },
   shell: {
-    openExternal: (url: string): Promise<OpenExternalResult> => window.bountydesk.shell.openExternal(url)
+    openExternal: (url: string): Promise<OpenExternalResult> => window.bountydesk.shell.openExternal(url),
+    openBrowser: (url?: string): Promise<{ ok: boolean; error?: string }> => window.bountydesk.shell.openBrowser(url)
   },
   scans: {
     start: (programId: string, opts: { depth: ScanDepth; roeConfirm: boolean; rateLimit?: number }): Promise<ScanStartResult> =>
@@ -80,6 +82,8 @@ export const Api = {
   tools: {
     list: (): Promise<ToolsListResult> => window.bountydesk.tools.list(),
     install: (id: string): Promise<ToolInstallResult> => window.bountydesk.tools.install(id),
+    onInstallOutput: (cb: (payload: ToolInstallOutput) => void): (() => void) =>
+      window.bountydesk.tools.onInstallOutput(cb),
     githubTokenStatus: (): Promise<GitHubTokenStatusResult> => window.bountydesk.tools.githubTokenStatus(),
     githubTokenSet: (token: string): Promise<GitHubTokenSetResult> => window.bountydesk.tools.githubTokenSet(token),
     githubTokenClear: (): Promise<DbResult> => window.bountydesk.tools.githubTokenClear()

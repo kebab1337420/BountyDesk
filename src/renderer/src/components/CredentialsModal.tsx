@@ -74,7 +74,7 @@ export function CredentialsModal({ program, onClose }: Props) {
       setDraft(empty)
       await load()
     } catch {
-      setError('Échec de l’enregistrement.')
+      setError("Échec de l'enregistrement.")
     } finally {
       setBusy(false)
     }

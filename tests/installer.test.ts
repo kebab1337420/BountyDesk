@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 
 vi.mock('electron', () => ({
   app: { getPath: () => mkdtempSync(join(tmpdir(), 'bountydesk-app-')) },
@@ -13,7 +13,13 @@ vi.mock('electron', () => ({
   ipcMain: { handle: vi.fn() },
 }))
 
-import { findFile, selectWindowsAsset } from '../src/main/services/tools/installer'
+import {
+  assertStaysInside,
+  findFile,
+  pathExecutableNames,
+  selectWindowsAsset,
+  withSystemInstallLock,
+} from '../src/main/services/tools/installer'
 
 describe('findFile (extraction d’archives GitHub)', () => {
   it('trouve un binaire à la racine par basename', () => {
@@ -112,5 +118,105 @@ describe('selectWindowsAsset (sélection d’asset Windows)', () => {
       'tool_1.0_checksums_windows_amd64.txt'
     ]))
     expect(url).toBe('https://x/tool_1.0_windows_amd64.zip')
+  })
+})
+
+describe('assertStaysInside (archive qui sortirait du dossier)', () => {
+  // tar ustar construit à la main : aucun binaire de fixture à versionner.
+  function buildTar(names: string[]): Buffer {
+    const blocks: Buffer[] = []
+    for (const name of names) {
+      const header = Buffer.alloc(512, 0)
+      header.write(name, 0, 100, 'utf8')
+      header.write('0000644\0', 100, 'ascii')
+      header.write('0000000\0', 108, 'ascii')
+      header.write('0000000\0', 116, 'ascii')
+      header.write('00000000000\0', 124, 'ascii')
+      header.write('00000000000\0', 136, 'ascii')
+      header.write('        ', 148, 'ascii')
+      header.write('0', 156, 'ascii')
+      header.write('ustar\0', 257, 'ascii')
+      header.write('00', 263, 'ascii')
+      let sum = 0
+      for (const byte of header) sum += byte
+      header.write(sum.toString(8).padStart(6, '0') + '\0 ', 148, 'ascii')
+      blocks.push(header)
+    }
+    blocks.push(Buffer.alloc(1024, 0))
+    return Buffer.concat(blocks)
+  }
+
+  function writeTar(names: string[]): string {
+    const dir = mkdtempSync(join(tmpdir(), 'bountydesk-tar-'))
+    const file = join(dir, 'archive.tar')
+    writeFileSync(file, buildTar(names))
+    return file
+  }
+
+  it('laisse passer une archive ordinaire', async () => {
+    await expect(assertStaysInside(writeTar(['tool.exe', 'README.md']))).resolves.toBeUndefined()
+  })
+
+  it('refuse une entrée ../', async () => {
+    await expect(assertStaysInside(writeTar(['../escaped.txt']))).rejects.toThrow(/hors dossier/)
+  })
+
+  it('refuse un ../ noyé dans un chemin', async () => {
+    await expect(assertStaysInside(writeTar(['bin/../../escaped.txt']))).rejects.toThrow(/hors dossier/)
+  })
+})
+
+describe('index PATH (détection sans spawn de processus)', () => {
+  const isWin = process.platform === 'win32'
+
+  it('trouve un exécutable déposé dans un dossier du PATH', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'bountydesk-path-'))
+    writeFileSync(join(dir, isWin ? 'bdfake-tool.exe' : 'bdfake-tool'), '')
+    const saved = process.env.PATH
+    process.env.PATH = [dir, saved].join(delimiter)
+    try {
+      expect(pathExecutableNames().has('bdfake-tool')).toBe(true)
+      expect(pathExecutableNames().has('bdfake-absent-9f3')).toBe(false)
+    } finally {
+      process.env.PATH = saved
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('se re-indexe quand le PATH change', () => {
+    const saved = process.env.PATH
+    process.env.PATH = ''
+    try {
+      expect(pathExecutableNames().size).toBe(0)
+    } finally {
+      process.env.PATH = saved
+    }
+    expect(pathExecutableNames().size).toBeGreaterThan(0)
+  })
+})
+
+describe('verrou installation système', () => {
+  const tick = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
+
+  it('ne passe jamais deux installations système en même temps', async () => {
+    let inside = 0
+    let peak = 0
+    const critical = async (): Promise<void> => {
+      inside++
+      peak = Math.max(peak, inside)
+      await tick(15)
+      inside--
+    }
+    await Promise.all([
+      withSystemInstallLock(critical),
+      withSystemInstallLock(critical),
+      withSystemInstallLock(critical)
+    ])
+    expect(peak).toBe(1)
+  })
+
+  it('reprend après un échec au lieu de bloquer la file', async () => {
+    await expect(withSystemInstallLock(() => Promise.reject(new Error('boom')))).rejects.toThrow('boom')
+    await expect(withSystemInstallLock(() => Promise.resolve('ok'))).resolves.toBe('ok')
   })
 })

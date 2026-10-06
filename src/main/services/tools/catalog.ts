@@ -5,7 +5,7 @@ export interface ToolDefinition {
   name: string
   description: string
   category: ToolCategory
-  source: 'winget' | 'github' | 'git'
+  source: 'winget' | 'github' | 'git' | 'pip'
   wingetId?: string
   githubRepo?: string
   githubAsset?: string
@@ -16,6 +16,14 @@ export interface ToolDefinition {
   exeName?: string
   /** Paquet Debian/Ubuntu pour installer cet outil sous Linux. */
   aptPackage?: string
+  /**
+   * Nom de la distribution PyPI quand source === 'pip'. L'installation passe
+   * par un venv isolé sous tools/<id> : aucune dépendance n'est injectée dans
+   * l'interpréteur système.
+   */
+  pipPackage?: string
+  /** Entrée point du module quand elle diffère du nom de la distribution. */
+  pythonModule?: string
   /** Le gestionnaire de paquets de la plateforme est requis (apt, winget...). */
   needsPackageManager?: boolean
   /** Outil sans équivalent hors Windows (Sysinternals, PowerToys...). */
@@ -493,6 +501,17 @@ export const TOOL_CATALOG: ToolDefinition[] = [
     defaultChecked: false
   },
   {
+    id: 'cloudfox',
+    name: 'cloudfox',
+    description: 'Cherche les données exposées et les permissions laxistes dans AWS, Azure et GCP',
+    category: 'recon',
+    source: 'github',
+    githubRepo: 'BishopFox/cloudfox',
+    githubAsset: 'windows-amd64',
+    githubAssetLinux: 'linux-amd64',
+    defaultChecked: false
+  },
+  {
     id: 's3scanner',
     name: 'S3Scanner',
     description: 'Cherche des buckets S3 mal configurés sur les API compatibles',
@@ -632,6 +651,28 @@ export const TOOL_CATALOG: ToolDefinition[] = [
     githubRepo: 'epi052/feroxbuster',
     githubAsset: 'x86_64-windows-feroxbuster',
     githubAssetLinux: 'x86_64-linux-feroxbuster.zip',
+    defaultChecked: false
+  },
+  {
+    id: 'crlfuzz',
+    name: 'crlfuzz',
+    description: 'Détecte les injections CRLF sur paramètres et endpoints HTTP',
+    category: 'fuzz',
+    source: 'github',
+    githubRepo: 'dwisiswant0/crlfuzz',
+    githubAsset: 'windows_amd64',
+    githubAssetLinux: 'linux_amd64',
+    defaultChecked: false
+  },
+  {
+    id: 'brutespray',
+    name: 'brutespray',
+    description: 'Spray de mots de passe sur SSH, FTP, SMB et autres services',
+    category: 'fuzz',
+    source: 'github',
+    githubRepo: 'x90skysn3k/brutespray',
+    githubAsset: 'windows_amd64',
+    githubAssetLinux: 'linux_amd64',
     defaultChecked: false
   },
   {
@@ -1263,6 +1304,28 @@ export const TOOL_CATALOG: ToolDefinition[] = [
     category: 'utility',
     source: 'github',
     githubRepo: 'tomnomnom/qsreplace',
+    githubAsset: 'windows-amd64',
+    githubAssetLinux: 'linux-amd64',
+    defaultChecked: false
+  },
+  {
+    id: 'anew',
+    name: 'anew',
+    description: 'Ajoute les lignes nouvelles d’un flux en ignorant les doublons',
+    category: 'utility',
+    source: 'github',
+    githubRepo: 'tomnomnom/anew',
+    githubAsset: 'windows-amd64',
+    githubAssetLinux: 'linux-amd64',
+    defaultChecked: false
+  },
+  {
+    id: 'gron',
+    name: 'gron',
+    description: 'Transforme du JSON en lignes-plate pour grep et awk',
+    category: 'utility',
+    source: 'github',
+    githubRepo: 'tomnomnom/gron',
     githubAsset: 'windows-amd64',
     githubAssetLinux: 'linux-amd64',
     defaultChecked: false
@@ -2728,6 +2791,42 @@ export const TOOL_CATALOG: ToolDefinition[] = [
     category: 'ai',
     source: 'git',
     githubRepo: 'h4ckologic/bughunter-ai',
+    defaultChecked: false
+  },
+  {
+    id: 'waymore',
+    name: 'Waymore',
+    description: "Harvesting d'URLs depuis Wayback Machine et sources passives",
+    category: 'recon',
+    source: 'pip',
+    pipPackage: 'waymore',
+    defaultChecked: false
+  },
+  {
+    id: 'uro',
+    name: 'Uro',
+    description: "Déduplication de listes d'URLs avant fuzzing",
+    category: 'fuzz',
+    source: 'pip',
+    pipPackage: 'uro',
+    defaultChecked: false
+  },
+  {
+    id: 'h8mail',
+    name: 'h8mail',
+    description: "Recherche d'emails et de fuites associées",
+    category: 'recon',
+    source: 'pip',
+    pipPackage: 'h8mail',
+    defaultChecked: false
+  },
+  {
+    id: 'git-dumper',
+    name: 'Git Dumper',
+    description: "Récupération d'un dépôt .git exposé publiquement",
+    category: 'recon',
+    source: 'pip',
+    pipPackage: 'git-dumper',
     defaultChecked: false
   }
 ]

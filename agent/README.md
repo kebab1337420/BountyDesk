@@ -48,9 +48,30 @@ Toolkit Claude Code qui fait travailler une IA sur des **missions autorisées** 
 | `.claude/agents/hunt-validated.md` | Agent « chasseur validé » avec garde-fous actifs. |
 | `mcp.example.json` | Gabarit de config MCP Claude Code. |
 
-## Sécurité
+## Assistant IA
 
-- BountyDesk **ne soumet jamais de rapport**. L'IA produit un brouillon dans `notes/`, vous triagez et soumettez.
-- Le serveur MCP refuse tout `start_scan` sans confirmation des règles d'engagement, et restreint les cibles au scope **in-scope** http(s).
-- `list_credentials` ne renvoie **jamais** les secrets.
-- Toute action est journalisée (onglet Activité des IA dans Réglages) : poste (jeton), outil, statut, durée.
+L'IA travaille en mode **assisté** : elle pilote BountyDesk par le serveur MCP, dans le périmètre du
+programme, et vous gardez la main sur tout ce qui sort.
+
+- **Rôle** : lecture du catalogue, récupération du scope et des ROE, tri des résultats, rédaction de brouillons.
+- **Garde-fous** : chaque appel est validé côté BountyDesk (scope in-scope, `roeConfirm`, listes de binaires autorisés, journalisation).
+- **Traçabilité** : *Réglages → Activité des IA* conserve poste, jeton, outil, statut et durée de chaque invocation.
+- **Limite ferme** : BountyDesk ne soumet aucun rapport. La soumission reste une action humaine.
+
+### Navigateur intégré
+
+Un bouton **Ouvrir le navigateur intégré** dans l'onglet **Assistant** ouvre une fenêtre de navigation
+dédiée : plus besoin d'empiler trente onglets pour lire une doc, un scope ou un advisory.
+
+- Le site distant est rendu dans un iframe sandboxé, **sans** accès au pont privilégié `bountydesk` : le contenu web ne peut pas appeler l'API de l'application.
+- Seuls `http` et `https` sont acceptés, et toute navigation est refusée hors de la fenêtre Assistant.
+- C'est un confort de travail, pas un canal d'action : rien n'y est exécuté.
+
+### Exécution d'outils
+
+`bountydesk/run_tool` autorise les binaires du catalogue BountyDesk et une liste de binaires système de
+confiance (interpréteurs `node`/`python`/`php`/`ruby`, coquilles `sh`/`bash`, réseau `curl`/`openssl`/`dig`,
+fichiers `grep`/`sed`/`awk`/`find`…). Restent refusés les téléchargeurs/lanceurs indirects
+(`certutil`, `bitsadmin`, `winget`, `mshta`, `rundll32`, `wscript`, `cscript`) ainsi que
+`cmd`/`powershell`/`pwsh`, qui disposeraient de cmdlets d'exécution mémoire que le suivi d'argv ne couvre pas.
+Le `cwd` reste confiné au dossier `tools` de BountyDesk.

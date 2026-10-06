@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import { IPC, type BountyDeskBridge, type SecretCopyKind } from '../shared/ipc'
+import { IPC, type BountyDeskBridge, type SecretCopyKind, type ToolInstallOutput } from '../shared/ipc'
 
 const bridge: BountyDeskBridge = {
   auth: {
@@ -24,6 +24,8 @@ const bridge: BountyDeskBridge = {
   },
   shell: {
     openExternal: (url: string) => ipcRenderer.invoke(IPC.OpenExternal, url),
+    openBrowser: (url?: string) => ipcRenderer.invoke(IPC.BrowserOpen, url),
+    closeBrowser: () => ipcRenderer.invoke(IPC.BrowserClose),
   },
   scans: {
     start: (programId: string, opts) => ipcRenderer.invoke(IPC.ScanStart, { programId, ...opts }),
@@ -34,6 +36,11 @@ const bridge: BountyDeskBridge = {
   tools: {
     list: () => ipcRenderer.invoke(IPC.ToolsList),
     install: (id: string) => ipcRenderer.invoke(IPC.ToolsInstall, id),
+    onInstallOutput: (cb) => {
+      const listener = (_e: unknown, payload: ToolInstallOutput): void => cb(payload)
+      ipcRenderer.on(IPC.ToolsInstallOutput, listener)
+      return () => ipcRenderer.removeListener(IPC.ToolsInstallOutput, listener)
+    },
     githubTokenStatus: () => ipcRenderer.invoke(IPC.ToolsGitHubTokenGet),
     githubTokenSet: (token: string) => ipcRenderer.invoke(IPC.ToolsGitHubTokenSet, token),
     githubTokenClear: () => ipcRenderer.invoke(IPC.ToolsGitHubTokenClear),

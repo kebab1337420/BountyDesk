@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BountyDesk - Navigateur Assistant</title>
+    <style>
+      html,
+      body,
+      #root {
+        height: 100%;
+        margin: 0;
+        background: #0e1116;
+        color: #e5e7eb;
+        font-family: system-ui, -apple-system, Segoe UI, sans-serif;
+      }
+      .browser-shell {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+      }
+      .browser-bar {
+        display: flex;
+        gap: 8px;
+        padding: 8px;
+        border-bottom: 1px solid #1f2937;
+        background: #0b0f14;
+      }
+      .browser-url {
+        flex: 1;
+        padding: 6px 10px;
+        background: #0f141b;
+        border: 1px solid #1f2937;
+        border-radius: 4px;
+        color: #e5e7eb;
+      }
+      .browser-bar button {
+        padding: 6px 12px;
+        border: 1px solid #1f2937;
+        border-radius: 4px;
+        background: #111827;
+        color: #e5e7eb;
+        cursor: pointer;
+      }
+      .browser-error {
+        margin: 0;
+        padding: 6px 10px;
+        color: #fca5a5;
+        font-size: 13px;
+      }
+      .browser-frame {
+        flex: 1;
+        width: 100%;
+        border: 0;
+        background: #ffffff;
+      }
+    </style>
+    <link rel="icon" type="image/png" href="/icon.png" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="./src/browser.tsx"></script>
+  </body>
+</html>

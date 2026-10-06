@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { app } from 'electron'
 import { copyFileSync, createWriteStream, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
-import { basename, join } from 'node:path'
+import { basename, delimiter, join } from 'node:path'
 import type { ToolEntry } from '../../../shared/ipc'
 import { getTool, TOOL_CATALOG, type ToolDefinition, type ToolInstallationResult } from './catalog'
 import { isChecksumAsset, parseChecksums, safeEqualHex, sha256File } from './integrity'
@@ -51,12 +51,27 @@ function assertGithubAssetUrl(raw: string): void {
 
 export function resolveBinary(tool: string): string | null {
   if (!/^[a-z0-9][a-z0-9._-]{0,59}$/i.test(tool) || !getTool(tool)) return null
+  const def = getTool(tool)
+  if (def?.source === 'pip') {
+    // Les binaires vivent dans le venv, pas dans le dossier de l'outil :
+    // exeCandidates ne peut pas les trouver seul.
+    const script = pipScriptPath(def)
+    return existsSync(script) ? script : null
+  }
   const dir = join(toolsDir(), tool)
   for (const name of exeCandidates(tool, getTool(tool)?.exeName)) {
     const candidate = join(dir, name)
     if (existsSync(candidate)) return candidate
   }
   return null
+}
+
+/** Chemin du script console créé par pip dans le venv isolé d'un outil. */
+function pipScriptPath(tool: ToolDefinition): string {
+  const stem = tool.exeName ?? tool.id
+  return isWindows()
+    ? join(toolsDir(), tool.id, '.venv', 'Scripts', `${stem}.exe`)
+    : join(toolsDir(), tool.id, '.venv', 'bin', stem)
 }
 
 export function resolveWordlist(tool = 'seclists'): string | null {
@@ -79,6 +94,22 @@ const MARKER = '.bountydesk-installed'
 
 /** Outils en cours d'installation : protege leur dossier des purges residues. */
 const activeInstalls = new Set<string>()
+
+/**
+ * Les gestionnaires de paquets système (winget, apt) verrouillent leur source
+ * et leur base locale : deux installations simultanées se marchent dessus.
+ * On les sérialise pendant que les téléchargements GitHub, les clonages et les
+ * environnements uv, eux, avancent bien en parallèle.
+ */
+let systemInstalls: Promise<unknown> = Promise.resolve()
+export function withSystemInstallLock<T>(fn: () => Promise<T>): Promise<T> {
+  const next = systemInstalls.then(fn, fn)
+  systemInstalls = next.then(
+    () => undefined,
+    () => undefined
+  )
+  return next
+}
 
 /**
  * Purge les archives et repertoires temporaires abandonnes par une
@@ -133,6 +164,12 @@ async function isGitRepoCloned(dest: string): Promise<boolean> {
 const RUN_TIMEOUT_MS = 5 * 60 * 1000
 const DETECT_TIMEOUT_MS = 10 * 1000
 const MAX_ASSET_BYTES = 512 * 1024 * 1024
+/** Plus de progression pendant 60 s = connexion morte : on coupe. */
+const DOWNLOAD_IDLE_MS = 60 * 1000
+/** Plafond global d'un téléchargement : 512 Mo dans le temps ≈ 4,5 Mbit/s. */
+const DOWNLOAD_TOTAL_MS = 15 * 60 * 1000
+/** Appels API GitHub : n'ont que des en-têtes à lire, 30 s suffisent. */
+const API_TIMEOUT_MS = 30 * 1000
 /** Code de retour distingue d'un echec : l'appel a depasse son budget de temps. */
 const TIMEOUT_CODE = -2
 
@@ -189,25 +226,78 @@ function platformLabel(): string {
 
 /**
  * Un outil installe dans le PATH du systeme est considere comme present.
- * On resout le chemin avec where/which au lieu de lancer `--version` : une
- * simple ouverture de l'onglet Outils ne doit jamais executer un binaire
- * trouve dans le PATH, qui peut venir d'un dossier utilisateur.
+ * Le PATH est lu une seule fois au lieu d'un `where.exe` par outil (70 ms
+ * chacun, soit 8 s sur les 122 cibles winget du catalogue). Comme precedemment,
+ * aucun binaire n'est execute : on ne lit que des repertoires.
  */
-async function detectedOnPath(tool: ToolDefinition): Promise<boolean> {
-  if (!tool.detectCmd) return false
-  const lookup: Spawn = isWindows()
-    ? { cmd: 'where.exe', args: [tool.detectCmd] }
-    : { cmd: 'which', args: [tool.detectCmd] }
-  const { code, stdout } = await runCapture(lookup)
-  if (code !== 0) return false
-  const first = stdout.split(/\r?\n/).map((l) => l.trim()).find((l) => l.length > 0)
-  if (!first) return false
-  return isAbsolutePath(first)
+let pathIndex: { key: string; names: Set<string> } | null = null
+
+export function pathExecutableNames(): Set<string> {
+  const raw = process.env.PATH ?? process.env.Path ?? ''
+  if (pathIndex?.key === raw) return pathIndex.names
+  const names = new Set<string>()
+  const exts = isWindows()
+    ? (process.env.PATHEXT ?? '.EXE;.CMD;.BAT;.COM')
+        .split(';')
+        .map((e) => e.trim().toLowerCase())
+        .filter(Boolean)
+    : []
+  for (const entry of raw.split(delimiter)) {
+    const dir = entry.replace(/^"|"$/g, '')
+    if (!dir || !isAbsolutePath(dir)) continue
+    let files
+    try {
+      files = readdirSync(dir, { withFileTypes: true })
+    } catch {
+      continue // repertoire illisible (droits, lien mort)
+    }
+    for (const file of files) {
+      if (!file.isFile() && !file.isSymbolicLink()) continue
+      const name = file.name.toLowerCase()
+      const ext = exts.find((e) => name.endsWith(e))
+      names.add(ext ? name.slice(0, -ext.length) : name)
+    }
+  }
+  pathIndex = { key: raw, names }
+  return names
+}
+
+async function detectedOnPath(tool: ToolDefinition, probe?: string): Promise<boolean> {
+  const name = probe ?? tool.detectCmd
+  if (!name) return false
+  return pathExecutableNames().has(name.toLowerCase())
 }
 
 function isAbsolutePath(p: string): boolean {
   if (isWindows()) return /^[a-zA-Z]:[\\/]/.test(p) || p.startsWith('\\\\')
   return p.startsWith('/')
+}
+
+/**
+ * Une seule enumeration `winget list` pour tout le catalogue : l'appel
+ * unitaire `winget list --exact --id` coute ~900 ms, soit 105 s sur les 122
+ * cibles winget. Retourne null si l'enumeration echoue, pour conserver le
+ * repli unitaire d'origine.
+ */
+let wingetIds: { value: Set<string>; at: number } | null = null
+
+function resetWingetDetection(): void {
+  wingetIds = null
+}
+
+async function installedWingetIds(): Promise<Set<string> | null> {
+  if (!isWindows()) return null
+  if (wingetIds && Date.now() - wingetIds.at < 60_000) return wingetIds.value
+  let captured: { code: number; stdout: string }
+  try {
+    captured = await runCapture({ cmd: 'winget', args: ['list'] }, 60_000)
+  } catch {
+    return null
+  }
+  if (captured.code !== 0) return null
+  const value = new Set(captured.stdout.toLowerCase().split(/\s+/).filter(Boolean))
+  wingetIds = { value, at: Date.now() }
+  return value
 }
 
 export async function isInstalled(tool: ToolDefinition): Promise<boolean> {
@@ -219,19 +309,41 @@ export async function isInstalled(tool: ToolDefinition): Promise<boolean> {
       // de non-interactif ; l'utilisateur installe l'outil lui-même.
       return false
     }
+    const installed = await installedWingetIds()
+    if (installed) {
+      // winget affiche `ARP\...` dans la colonne ID pour les apps installees
+      // hors winget (Firefox, Discord) : leur id n'y figure pas, leur nom si.
+      // On teste donc l'id, l'id winget, la commande et le nom.
+      const keys = [tool.wingetId, tool.id, tool.detectCmd, tool.exeName, tool.name]
+        .filter((k): k is string => Boolean(k))
+        .map((k) => k.toLowerCase())
+      return keys.some((k) => installed.has(k))
+    }
     const code = await run('winget', ['list', '--exact', '--id', tool.wingetId], undefined, DETECT_TIMEOUT_MS)
     return code === 0
   }
   if (tool.source === 'github') {
-    return hasPortableBinary(toolsDir(), tool)
+    if (await hasPortableBinary(toolsDir(), tool)) return true
+    // Un outil installe via apt (repli Linux) vit dans le PATH systeme et n'a
+    // aucun binaire portable : sans ce test il semblerait installe en permanence,
+    // et chaque relance relancerait l'installation.
+    if (!isWindows() && tool.aptPackage) {
+      return detectedOnPath(tool, tool.exeName ?? tool.id)
+    }
+    return false
   }
   if (tool.source === 'git') {
     return existsSync(join(gitPkgPath(tool.id), MARKER))
+  }
+  if (tool.source === 'pip') {
+    return existsSync(pipScriptPath(tool))
   }
   return false
 }
 
 export async function currentTools(): Promise<ToolEntry[]> {
+  // Une actualisation doit refléter l'état réel : on repart d'une enumeration fraiche.
+  resetWingetDetection()
   const tools: ToolEntry[] = []
   for (const def of TOOL_CATALOG) {
     let installed = false
@@ -266,30 +378,52 @@ function githubHeaders(): Record<string, string> {
  * limite, que l'en-tete content-length soit absent ou menteur.
  */
 async function downloadToFile(url: string, dest: string): Promise<void> {
-  const res = await fetch(url, { headers: githubHeaders() })
-  if (!res.ok) throw new Error(`Téléchargement refusé (HTTP ${res.status})`)
-  assertGithubAssetUrl(res.url || url)
-  const declared = Number(res.headers.get('content-length') ?? 0)
-  if (Number.isFinite(declared) && declared > MAX_ASSET_BYTES) {
-    throw new Error(`Archive refusée : ${Math.round(declared / 1048576)} Mo dépassent la limite`)
-  }
-  if (!res.body) throw new Error('Réponse sans corps')
-  const file = createWriteStream(dest)
-  let total = 0
+  // Un fetch sans garde-fou reste bloqué indéfiniment quand la connexion meurt
+  // sans fin de trame : l'installation n'en sort jamais, d'où le « lente à
+  // mourir ». Un plancher de progression coupe tôt, un plafond coupe sûr.
+  const ctrl = new AbortController()
+  const startedAt = Date.now()
+  let lastProgress = Date.now()
+  let stall: string | null = null
+  const watchdog = setInterval(() => {
+    if (stall) return
+    const now = Date.now()
+    if (now - lastProgress > DOWNLOAD_IDLE_MS) {
+      stall = `Téléchargement interrompu : plus de progression depuis ${DOWNLOAD_IDLE_MS / 1000} s.`
+    } else if (now - startedAt > DOWNLOAD_TOTAL_MS) {
+      stall = `Téléchargement interrompu : délai total de ${DOWNLOAD_TOTAL_MS / 60000} min dépassé.`
+    }
+    if (stall) ctrl.abort()
+  }, 2000)
+  let file: ReturnType<typeof createWriteStream> | null = null
   try {
+    const res = await fetch(url, { headers: githubHeaders(), signal: ctrl.signal })
+    if (!res.ok) throw new Error(`Téléchargement refusé (HTTP ${res.status})`)
+    assertGithubAssetUrl(res.url || url)
+    lastProgress = Date.now()
+    const declared = Number(res.headers.get('content-length') ?? 0)
+    if (Number.isFinite(declared) && declared > MAX_ASSET_BYTES) {
+      throw new Error(`Archive refusée : ${Math.round(declared / 1048576)} Mo dépassent la limite`)
+    }
+    if (!res.body) throw new Error('Réponse sans corps')
+    file = createWriteStream(dest)
+    let total = 0
     for await (const chunk of res.body as AsyncIterable<Uint8Array>) {
+      lastProgress = Date.now()
       total += chunk.byteLength
       if (total > MAX_ASSET_BYTES) throw new Error('Archive refusée : limite de taille dépassée')
       if (!file.write(chunk)) await once(file, 'drain')
     }
+    file.end()
+    await once(file, 'close')
+    if (total === 0) throw new Error('Archive vide')
   } catch (err) {
-    file.destroy()
+    file?.destroy()
     rmSync(dest, { force: true })
-    throw err
+    throw stall ? new Error(stall) : err
+  } finally {
+    clearInterval(watchdog)
   }
-  file.end()
-  await once(file, 'close')
-  if (total === 0) throw new Error('Archive vide')
 }
 
 /** @deprecated Utiliser selectReleaseAsset de ./platform. Conservé pour les tests existants. */
@@ -302,7 +436,45 @@ export function selectWindowsAsset(
 }
 
 /** Extrait une archive en routant sur l'outil adapté à son format réel. */
+/** Liste les entrees d'une archive sans l'extraire, avec les memes outils que l'extraction. */
+async function listArchiveEntries(archive: string): Promise<string[] | null> {
+  const isZip = /\.zip$/i.test(archive)
+  const attempts: Spawn[] = isZip
+    ? [
+        { cmd: 'tar', args: ['-tf', archive] },
+        { cmd: 'unzip', args: ['-Z1', archive] }
+      ]
+    : [{ cmd: 'tar', args: ['-tf', archive] }]
+
+  for (const attempt of attempts) {
+    let captured: { code: number; stdout: string }
+    try {
+      captured = await runCapture(attempt)
+    } catch {
+      continue // binaire absent sur cette plateforme
+    }
+    if (captured.code === 0) {
+      return captured.stdout
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+    }
+  }
+  return null
+}
+
+/** Refuse une archive dont une entree s'echapperait du dossier de destination. */
+export async function assertStaysInside(archive: string): Promise<void> {
+  const entries = await listArchiveEntries(archive)
+  if (!entries) return
+  const escape = entries.find((entry) => entry.split(/[\\/]/).includes('..'))
+  if (escape) {
+    throw new Error(`Archive refusee : entree hors dossier de destination (${escape})`)
+  }
+}
+
 async function extractArchive(archive: string, dest: string, onOutput: (line: string) => void): Promise<void> {
+  await assertStaysInside(archive)
   const isZip = /\.zip$/i.test(archive)
   // tar de GNU (Linux) ne gère pas le zip ; bsdtar (Windows 10+) le gère.
   const attempts: Spawn[] = isZip
@@ -327,9 +499,17 @@ async function extractArchive(archive: string, dest: string, onOutput: (line: st
 
 /** Telecharge un petit fichier texte (checksums) en plafonnant la taille. */
 async function downloadText(url: string, maxBytes = 1024 * 1024): Promise<string> {
-  const res = await fetch(url, { headers: githubHeaders() })
+  const res = await fetch(url, { headers: githubHeaders(), signal: AbortSignal.timeout(API_TIMEOUT_MS) })
   if (!res.ok) throw new Error(`Téléchargement refusé (HTTP ${res.status})`)
   assertGithubAssetUrl(res.url || url)
+  const contentLength = res.headers.get('content-length')
+  if (contentLength) {
+    const cl = Number(contentLength)
+    if (!Number.isNaN(cl) && cl > maxBytes) {
+      throw new Error('Fichier de sommes de contrôle trop volumineux')
+    }
+  }
+  if (!res.body) throw new Error('Réponse vide')
   const buf = Buffer.from(await res.arrayBuffer())
   if (buf.byteLength > maxBytes) throw new Error('Fichier de sommes de contrôle trop volumineux')
   return buf.toString('utf8')
@@ -400,7 +580,8 @@ async function installGithub(tool: ToolDefinition, onOutput: (line: string) => v
     )
   }
   const release = await fetch(`https://api.github.com/repos/${tool.githubRepo}/releases/latest`, {
-    headers: { ...githubHeaders(), Accept: 'application/vnd.github+json' }
+    headers: { ...githubHeaders(), Accept: 'application/vnd.github+json' },
+    signal: AbortSignal.timeout(API_TIMEOUT_MS)
   })
   if (!release.ok) throw new Error(`Impossible de lire les releases GitHub (HTTP ${release.status})`)
   const body = (await release.json()) as { tag_name?: string; assets?: { name: string; browser_download_url: string }[] }
@@ -504,6 +685,53 @@ async function installViaApt(tool: ToolDefinition, onOutput: (line: string) => v
   return `apt a échoué (pkexec ${code}, sudo ${sudoCode}) pour ${pkg}.`
 }
 
+/**
+ * Installe une distribution PyPI dans un venv isolé sous tools/<id>. Rien n'est
+ * ajouté à l'interpréteur système : le script console créé par pip devient le
+ * binaire trouvé par resolveBinary. uv sert d'outil (déjà présent au catalogue).
+ */
+async function installPip(tool: ToolDefinition, onOutput: (line: string) => void): Promise<void> {
+  const dist = tool.pipPackage ?? tool.id
+  const dir = join(toolsDir(), tool.id)
+  const venv = join(dir, '.venv')
+  const uv = resolveBinary('uv') ?? 'uv'
+  mkdirSync(dir, { recursive: true })
+  // On repart d'un venv neuf : un venv partiel rend un script console incomplet.
+  rmSync(venv, { recursive: true, force: true })
+
+  onOutput(`Création d'un venv pour ${dist}…`)
+  const venvCode = await run(uv, ['venv', venv], onOutput)
+  if (venvCode !== 0) {
+    throw new Error(
+      `uv venv a échoué (code ${venvCode}). Installez uv (outil du catalogue) avant de réessayer.`
+    )
+  }
+
+  const py = isWindows() ? join(venv, 'Scripts', 'python.exe') : join(venv, 'bin', 'python')
+  onOutput(`Installation de ${dist} depuis PyPI…`)
+  const installCode = await run(uv, ['pip', 'install', '--python', py, dist], onOutput)
+  if (installCode !== 0) throw new Error(`Installation de ${dist} a échoué (code ${installCode})`)
+
+  const script = pipScriptPath(tool)
+  if (!existsSync(script)) {
+    // Sans cette liste, un nom d'entrée point faux se traduit par un échec
+    // muet : on montre plutôt ce que pip a réellement créé pour que l'ajout
+    // d'une entrée au catalogue soit vérifiable à la main.
+    const binDir = isWindows() ? join(venv, 'Scripts') : join(venv, 'bin')
+    const noise = /^(python|pip|activate|Activate|Activate\.)/
+    const found = existsSync(binDir)
+      ? readdirSync(binDir).filter((n) => !noise.test(n)).join(', ')
+      : '(dossier absent)'
+    throw new Error(
+      `Entrée point « ${tool.exeName ?? tool.id} » introuvable après installation de ${dist}.`
+      + ` Scripts disponibles : ${found || '(aucun)'}.`
+      + ' Renseignez exeName dans le catalogue avec le bon nom.'
+    )
+  }
+  if (!isWindows()) makeExecutable(script)
+  onOutput(`Installé : ${basename(script)}`)
+}
+
 export async function installTool(id: string, onOutput?: (line: string) => void): Promise<ToolInstallationResult> {
   const tool = getTool(id)
   if (!tool) return { ok: false, error: `Outil inconnu : ${id}` }
@@ -511,6 +739,10 @@ export async function installTool(id: string, onOutput?: (line: string) => void)
     if (await isInstalled(tool)) {
       onOutput?.('Déjà installé, rien à faire.')
       return { ok: true, installed: true }
+    }
+    if (tool.source === 'pip') {
+      await installPip(tool, onOutput ?? (() => {}))
+      return { ok: true, installed: await isInstalled(tool) }
     }
     if (tool.source === 'winget' && tool.wingetId) {
       if (tool.windowsOnly === true) {
@@ -523,14 +755,23 @@ export async function installTool(id: string, onOutput?: (line: string) => void)
         }
       }
       if (isWindows()) {
-        const code = await run(
-          'winget',
-          ['install', '--exact', '--id', tool.wingetId, '--silent', '--accept-source-agreements', '--accept-package-agreements', '--disable-interactivity'],
-          onOutput
-        )
+        const args = [
+          'install',
+          '--exact',
+          '--id',
+          tool.wingetId,
+          '--silent',
+          '--accept-source-agreements',
+          '--accept-package-agreements',
+          '--disable-interactivity'
+        ]
+        const code = await withSystemInstallLock(() => run('winget', args, onOutput))
+        if (code === TIMEOUT_CODE) return { ok: false, error: 'winget : délai dépassé (5 min).' }
         if (code !== 0) return { ok: false, error: `winget a échoué (code ${code})` }
       } else if (tool.aptPackage) {
-        const aptError = await installViaApt(tool, onOutput ?? (() => {}))
+        const aptError = await withSystemInstallLock(() =>
+          installViaApt(tool, onOutput ?? (() => {}))
+        )
         if (aptError !== null) return { ok: false, error: aptError }
       } else {
         return {
@@ -541,8 +782,23 @@ export async function installTool(id: string, onOutput?: (line: string) => void)
     } else if (tool.source === 'git') {
       await installGit(tool, onOutput ?? (() => {}))
     } else {
-      await installGithub(tool, onOutput ?? (() => {}))
+      // Decision prise AVANT toute tentative de téléchargement : si GitHub n'a
+      // pas d'asset pour cette plateforme, on sait deja qu'installGithub va
+      // echouer, alors on appelle apt explicitement. Ce n'est jamais un repli en
+      // catch : un binaire corrompu ou un echec de verification d'integrite ne
+      // doit pas pouvoir etre contourne par une installation via apt.
+      const wanted = assetFilterFor(tool, releaseTarget())
+      if (!isWindows() && tool.aptPackage && wanted === null) {
+        const aptError = await withSystemInstallLock(() => installViaApt(tool, onOutput ?? (() => {})))
+        if (aptError !== null) return { ok: false, error: aptError }
+      } else {
+        await installGithub(tool, onOutput ?? (() => {}))
+      }
     }
+    // L'installation vient de changer l'état : on repart d'une enumeration
+    // fraiche (le cache d'enumeration winget vit 60 s) avant la verification
+    // finale, qui sert de preuve d'installation a l'UI.
+    resetWingetDetection()
     return { ok: true, installed: await isInstalled(tool) }
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) }

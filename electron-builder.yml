@@ -11,12 +11,14 @@ files:
   - package.json
 
 win:
+  icon: build/icon.ico
   target:
     - target: nsis
       arch:
         - x64
 
 linux:
+  icon: build/icon.png
   target:
     - target: AppImage
       arch:

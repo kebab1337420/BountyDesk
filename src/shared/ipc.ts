@@ -24,12 +24,15 @@ export const IPC = {
   CredentialsRemove: 'credentials:remove',
   CredentialsReveal: 'credentials:reveal',
   OpenExternal: 'shell:openExternal',
+  BrowserOpen: 'browser:open',
+  BrowserClose: 'browser:close',
   ScanStart: 'scan:start',
   ScanList: 'scan:list',
   ScanEvents: 'scan:events',
   ScanStop: 'scan:stop',
   ToolsList: 'tools:list',
   ToolsInstall: 'tools:install',
+  ToolsInstallOutput: 'tools:install:output',
   ToolsGitHubTokenGet: 'tools:githubToken:get',
   ToolsGitHubTokenSet: 'tools:githubToken:set',
   ToolsGitHubTokenClear: 'tools:githubToken:clear',
@@ -218,7 +221,7 @@ export interface ToolEntry {
   name: string
   description: string
   category: string
-  source: 'winget' | 'github' | 'git'
+  source: 'winget' | 'github' | 'git' | 'pip'
   installed: boolean
   defaultChecked: boolean
   docs?: string
@@ -227,6 +230,9 @@ export interface ToolEntry {
 export type ToolsListResult = { ok: true; tools: ToolEntry[] } | DbFail
 
 export type ToolInstallResult = { ok: true; installed: boolean; output: string } | { ok: false; error: string; output: string }
+
+/** Ligne d'une installation, émise au fil de l'eau pendant qu'elle tourne. */
+export type ToolInstallOutput = { id: string; line: string }
 
 export type GitHubTokenStatusResult = { ok: true; configured: boolean } | DbFail
 
@@ -380,6 +386,8 @@ export interface BountyDeskBridge {
   }
   shell: {
     openExternal(url: string): Promise<OpenExternalResult>
+    openBrowser(url?: string): Promise<{ ok: boolean; error?: string }>
+    closeBrowser(): Promise<{ ok: boolean; error?: string }>
   }
   scans: {
     start(programId: string, opts: { depth: ScanDepth; roeConfirm: boolean; rateLimit?: number }): Promise<ScanStartResult>
@@ -390,6 +398,7 @@ export interface BountyDeskBridge {
   tools: {
     list(): Promise<ToolsListResult>
     install(id: string): Promise<ToolInstallResult>
+    onInstallOutput(cb: (payload: ToolInstallOutput) => void): () => void
     githubTokenStatus(): Promise<GitHubTokenStatusResult>
     githubTokenSet(token: string): Promise<GitHubTokenSetResult>
     githubTokenClear(): Promise<DbResult>

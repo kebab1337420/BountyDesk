@@ -13,6 +13,7 @@ import { activeScanCount, activeScanForProgram, startScan } from '../scan/runner
 import { getTool, TOOL_CATALOG } from '../tools/catalog'
 import { currentTools, installTool, resolveBinary, toolsDir } from '../tools/installer'
 import { attachAgentsToServer, closeAgents, configureAgents, type AgentAuthEntry } from './agents'
+import { openBrowserWindow } from '../../ipc-browser'
 
 const PROTOCOL_VERSION = '2024-11-05'
 const MAX_BODY = 1024 * 1024
@@ -45,6 +46,11 @@ function asInt(value: unknown, min: number, max: number): number | null {
   return value >= min && value <= max ? value : null
 }
 
+/** Plafond du champ note d'un programme, toutes notes confondues. */
+const NOTE_MAX_CHARS = 20_000
+/** Format d'une ligne de note ajoutee par set_note. */
+const NOTE_LINE = /^-\s*\[([^\]]{4,40})\]\s*(.+)$/
+
 function splitArgs(str: string): string[] {
   // Supporte les guillemets simples (convention POSIX) comme les guillemets doubles.
   const tokens = str.match(/"[^"]*"|'[^']*'|\S+/g)
@@ -56,13 +62,398 @@ function splitArgs(str: string): string[] {
   )
 }
 
+// ---------------------------------------------------------------------------
+// CVSS v3.1 — calcul pur, local, sans reseau.
+//
+// Poids et equations repris de la specification FIRST (section 7.1 et 7.4).
+// L'arrondi "Roundup" est celui de l'annexe A : on travaille en milliemes pour
+// que le resultat ne depende pas des arrondis flottants de la plateforme.
+// Valeurs de reference croisees avec l'implementation officielle
+// (first.org/cvss, CVSS31.calculateCVSSFromVector) : les 20 vecteurs
+// verifies dans tests/mcp-http.test.ts (dont les exemples publies de FIRST)
+// donnent le meme score. Les metriques temporelles et environnementales sont
+// ignorees pour le score de base : elles sont signalees dans la reponse plutot
+// que silencieuses.
+// ---------------------------------------------------------------------------
+
+const CVSS_WEIGHTS = {
+  AV: { N: 0.85, A: 0.62, L: 0.55, P: 0.2 },
+  AC: { L: 0.77, H: 0.44 },
+  PR_U: { N: 0.85, L: 0.62, H: 0.27 },
+  PR_C: { N: 0.85, L: 0.68, H: 0.5 },
+  UI: { N: 0.85, R: 0.62 },
+  CIA: { H: 0.56, L: 0.22, N: 0 },
+} as const
+
+const CVSS_BASE_METRICS = ['AV', 'AC', 'PR', 'UI', 'S', 'C', 'I', 'A'] as const
+/** Metriques hors base : acceptees pour ne pas rejeter un vecteur NVD, mais ignorees. */
+const CVSS_OTHER_METRICS: Record<string, string[]> = {
+  E: ['X', 'U', 'P', 'F', 'H'],
+  RL: ['X', 'O', 'T', 'W', 'U'],
+  RC: ['X', 'C', 'R', 'U'],
+  CR: ['X', 'L', 'M', 'H'],
+  IR: ['X', 'L', 'M', 'H'],
+  AR: ['X', 'L', 'M', 'H'],
+  MAV: ['X', 'N', 'A', 'L', 'P'],
+  MAC: ['X', 'L', 'H'],
+  MPR: ['X', 'N', 'L', 'H'],
+  MUI: ['X', 'N', 'R'],
+  MS: ['X', 'U', 'C'],
+  MC: ['X', 'N', 'L', 'H'],
+  MI: ['X', 'N', 'L', 'H'],
+  MA: ['X', 'N', 'L', 'H'],
+}
+
+/** Roundup a une decimale (annexe A de la specification). */
+function cvssRoundup(value: number): number {
+  const intInput = Math.round(value * 100_000)
+  if (intInput % 10_000 === 0) return intInput / 100_000
+  return (Math.floor(intInput / 10_000) + 1) / 10
+}
+
+function cvssSeverity(score: number): string {
+  if (score === 0) return 'Aucun'
+  if (score < 4) return 'Faible'
+  if (score < 7) return 'Moyen'
+  if (score < 9) return 'Élevé'
+  return 'Critique'
+}
+
+function cvssRound(value: number): number {
+  return Math.round(value * 1e6) / 1e6
+}
+
+type CvssComputation =
+  | {
+      ok: true
+      input: string
+      baseVector: string
+      version: string
+      baseScore: number
+      severity: string
+      iss: number
+      impact: number
+      exploitability: number
+      metrics: Record<string, string>
+      ignoredMetrics: string[]
+    }
+  | { ok: false; error: string }
+
+/**
+ * Calcule le score de base CVSS v3.1 d'un vecteur. Le prefixe "CVSS:3.1" est
+ * recommande mais facultatif ; "CVSS:3.0" est accepte car les poids des
+ * metriques de base sont identiques (seules les formules environnementales
+ * different, et elles ne sont pas calculees ici).
+ */
+function computeCvssBase(raw: string): CvssComputation {
+  let version = '3.1'
+  let body = raw.trim()
+  const prefix = /^CVSS:(\d\.\d)\//i.exec(body)
+  if (prefix) {
+    version = prefix[1]!
+    if (version !== '3.1' && version !== '3.0') {
+      return { ok: false, error: `Version CVSS non gérée : ${version} (outil limité à 3.1)` }
+    }
+    body = body.slice(prefix[0].length)
+  } else if (/^CVSS:/i.test(body)) {
+    return { ok: false, error: 'Préfixe de version mal formé (attendu CVSS:3.1/...)' }
+  }
+
+  const metrics: Record<string, string> = {}
+  const ignored: string[] = []
+  for (const part of body.split('/')) {
+    if (part === '') continue
+    const kv = /^([A-Za-z]{1,3}):([A-Za-z])$/.exec(part)
+    if (!kv) return { ok: false, error: `Segment de vecteur illisible : ${part}` }
+    const key = kv[1]!.toUpperCase()
+    const val = kv[2]!.toUpperCase()
+    if (key in metrics) return { ok: false, error: `Métrique en double : ${key}` }
+    const others = CVSS_OTHER_METRICS[key]
+    if (others) {
+      if (!others.includes(val)) return { ok: false, error: `Valeur invalide pour ${key} : ${val}` }
+      metrics[key] = val
+      ignored.push(key)
+      continue
+    }
+    const baseIndex = CVSS_BASE_METRICS.indexOf(key as (typeof CVSS_BASE_METRICS)[number])
+    if (baseIndex === -1) return { ok: false, error: `Métrique inconnue : ${key}` }
+    metrics[key] = val
+  }
+
+  for (const key of CVSS_BASE_METRICS) {
+    if (!(key in metrics)) return { ok: false, error: `Métrique de base manquante : ${key}` }
+  }
+  if (metrics.S !== 'U' && metrics.S !== 'C') {
+    return { ok: false, error: `Valeur invalide pour S : ${metrics.S}` }
+  }
+
+  const av = CVSS_WEIGHTS.AV[metrics.AV as keyof typeof CVSS_WEIGHTS.AV]
+  const ac = CVSS_WEIGHTS.AC[metrics.AC as keyof typeof CVSS_WEIGHTS.AC]
+  const prTable = metrics.S === 'C' ? CVSS_WEIGHTS.PR_C : CVSS_WEIGHTS.PR_U
+  const pr = prTable[metrics.PR as keyof typeof prTable]
+  const ui = CVSS_WEIGHTS.UI[metrics.UI as keyof typeof CVSS_WEIGHTS.UI]
+  const cia = CVSS_WEIGHTS.CIA
+  const c = cia[metrics.C as keyof typeof cia]
+  const i = cia[metrics.I as keyof typeof cia]
+  const a = cia[metrics.A as keyof typeof cia]
+  const scopeChanged = metrics.S === 'C'
+  if ([av, ac, pr, ui, c, i, a].some((v) => v === undefined)) {
+    return { ok: false, error: 'Valeur de métrique de base hors domaine' }
+  }
+
+  const iss = 1 - (1 - c!) * (1 - i!) * (1 - a!)
+  const impact = scopeChanged
+    ? 7.52 * (iss - 0.029) - 3.25 * (iss - 0.02) ** 15
+    : 6.42 * iss
+  const exploitability = 8.22 * av! * ac! * pr! * ui!
+  const raw0 = impact <= 0
+    ? 0
+    : scopeChanged
+      ? cvssRoundup(Math.min(1.08 * (impact + exploitability), 10))
+      : cvssRoundup(Math.min(impact + exploitability, 10))
+
+  const ordered = CVSS_BASE_METRICS.map((k) => `${k}:${metrics[k]}`).join('/')
+  return {
+    ok: true,
+    input: raw,
+    baseVector: `CVSS:${version}/${ordered}`,
+    version,
+    baseScore: raw0,
+    severity: cvssSeverity(raw0),
+    iss: cvssRound(iss),
+    impact: cvssRound(impact),
+    exploitability: cvssRound(exploitability),
+    metrics: Object.fromEntries(CVSS_BASE_METRICS.map((k) => [k, metrics[k]!])),
+    ignoredMetrics: ignored,
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Lecture de page distante (GET uniquement, sans identifiant).
+//
+// Cette lecture sert a consulter une politique de programme, un scope ou un
+// advisory. Elle n'envoie aucun cookie, aucun header Authorization et ne
+// reutilise pas le jeton Intigriti : un GET anonyme ne peut donc passubmittre
+// quoi que ce soit. Les bornees (protocole, taille, delai, redirections) sont
+// la seule protection contre un agent qui pointe l'outil n'importe ou.
+// ---------------------------------------------------------------------------
+
+const PAGE_TIMEOUT_MS = 15_000
+const PAGE_MAX_REDIRECTS = 5
+const PAGE_USER_AGENT = 'BountyDesk/0.1 (lecteur de page pour agent IA, GET seul)'
+
+const HTML_ENTITIES: Record<string, string> = {
+  nbsp: ' ', amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", '#39': "'", '#x27': "'",
+  mdash: '—', ndash: '–', hellip: '…', laquo: '«', raquo: '»',
+  eacute: 'é', egrave: 'è', ecirc: 'ê', agrave: 'à', ccedil: 'ç', ugrave: 'ù',
+}
+
+function decodeEntities(input: string): string {
+  return input.replace(/&(#x?[0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]{0,10});/g, (match, name: string) => {
+    const key = name.toLowerCase()
+    const direct = HTML_ENTITIES[key]
+    if (direct !== undefined) return direct
+    if (key.startsWith('#x') || key.startsWith('#')) {
+      const cp = key.startsWith('#x') ? Number.parseInt(key.slice(2), 16) : Number.parseInt(key.slice(1), 10)
+      if (Number.isFinite(cp) && cp > 0 && cp <= 0x10ffff) return String.fromCodePoint(cp)
+    }
+    return match
+  })
+}
+
+/** HTML -> texte : supprime script/style/contenus non rendus, garde les sauts de blocs. */
+function htmlToText(html: string): string {
+  let out = html
+  out = out.replace(/<!--[\s\S]*?-->/g, ' ')
+  out = out.replace(/<(script|style|noscript|template|svg)\b[^>]*>[\s\S]*?<\/\s*\1\s*>/gi, ' ')
+  out = out.replace(/<\/?(script|style|noscript|template|svg)\b[^>]*>/gi, ' ')
+  out = out.replace(
+    /<\/?(p|div|br|li|ul|ol|tr|td|th|table|thead|tbody|section|article|header|footer|nav|aside|main|h[1-6]|pre|blockquote|form|hr|dl|dt|dd)\b[^>]*>/gi,
+    '\n',
+  )
+  out = out.replace(/<[^>]*>/g, ' ')
+  out = decodeEntities(out)
+  return out
+    .split('\n')
+    .map((line) => line.replace(/[^\S\n]+/g, ' ').trim())
+    .filter((line) => line !== '')
+    .join('\n')
+}
+
+function isHttpUrl(u: URL): boolean {
+  return (u.protocol === 'http:' || u.protocol === 'https:') && u.hostname !== ''
+}
+
+/** Lit le corps en plafonnant les octets : au-dela, on coupe et on le signale. */
+async function readCapped(res: Response, maxBytes: number): Promise<{ buf: Buffer; truncated: boolean }> {
+  const body = res.body
+  if (!body) return { buf: Buffer.alloc(0), truncated: false }
+  const reader = body.getReader()
+  const chunks: Buffer[] = []
+  let size = 0
+  let truncated = false
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    if (!value) continue
+    size += value.byteLength
+    if (size > maxBytes) {
+      chunks.push(Buffer.from(value.subarray(0, value.byteLength - (size - maxBytes))))
+      truncated = true
+      break
+    }
+    chunks.push(Buffer.from(value))
+  }
+  try {
+    await reader.cancel()
+  } catch {
+    // le corps est de toute facon abandonne
+  }
+  return { buf: Buffer.concat(chunks), truncated }
+}
+
+type PageResult =
+  | {
+      ok: true
+      url: string
+      finalUrl: string
+      status: number
+      contentType: string
+      bytes: number
+      truncated: boolean
+      raw: string
+    }
+  | { ok: false; error: string }
+
+async function fetchPageText(startUrl: string, maxBytes: number): Promise<PageResult> {
+  let current = startUrl
+  for (let hop = 0; hop <= PAGE_MAX_REDIRECTS; hop++) {
+    const ctrl = new AbortController()
+    const timer = setTimeout(() => ctrl.abort(), PAGE_TIMEOUT_MS)
+    let res: Response
+    try {
+      res = await fetch(current, {
+        method: 'GET',
+        redirect: 'manual',
+        signal: ctrl.signal,
+        credentials: 'omit',
+        headers: {
+          'user-agent': PAGE_USER_AGENT,
+          accept: 'text/html,application/xhtml+xml,text/plain;q=0.9,application/json;q=0.8,*/*;q=0.5',
+          'accept-language': 'en',
+        },
+      })
+    } catch (err) {
+      clearTimeout(timer)
+      const reason = err instanceof Error ? err.name === 'AbortError' ? `délai de ${PAGE_TIMEOUT_MS / 1000} s dépassé` : err.message : String(err)
+      return { ok: false, error: `GET ${current} impossible : ${reason}` }
+    }
+
+    const location = res.headers.get('location')
+    if ([301, 302, 303, 307, 308].includes(res.status) && location) {
+      void res.body?.cancel()
+      clearTimeout(timer)
+      let next: URL
+      try {
+        next = new URL(location, current)
+      } catch {
+        return { ok: false, error: `Redirection vers une URL illisible : ${location}` }
+      }
+      if (!isHttpUrl(next)) {
+        return { ok: false, error: `Redirection vers un protocole non autorisé (${next.protocol})` }
+      }
+      current = next.toString()
+      continue
+    }
+
+    try {
+      if (!res.ok) {
+        return { ok: false, error: `HTTP ${res.status} sur ${current}` }
+      }
+      const contentType = res.headers.get('content-type') ?? ''
+      const { buf, truncated } = await readCapped(res, maxBytes)
+      const charset = /charset=([\w-]+)/i.exec(contentType)?.[1]
+      let raw: string
+      try {
+        raw = new TextDecoder(charset && /^[A-Za-z0-9_-]+$/.test(charset) ? charset : 'utf-8').decode(buf)
+      } catch {
+        raw = buf.toString('utf-8')
+      }
+      return { ok: true, url: startUrl, finalUrl: current, status: res.status, contentType, bytes: buf.byteLength, truncated, raw }
+    } catch (err) {
+      const reason = err instanceof Error ? (err.name === 'AbortError' ? `délai de ${PAGE_TIMEOUT_MS / 1000} s dépassé` : err.message) : String(err)
+      return { ok: false, error: `Lecture de ${current} interrompue : ${reason}` }
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+  return { ok: false, error: `Trop de redirections (plafond ${PAGE_MAX_REDIRECTS})` }
+}
+
+/**
+ * Canonicalise une URL pour dedoublonner : casse de l'hote, port par defaut,
+ * fragment et parametres de suivi retires, query triee, slash final de chemin
+ * normalise (sauf racine). Le path sert de cle de regroupement par endpoint.
+ */
+function canonicalizeUrl(raw: string): { url: string; endpoint: string } | null {
+  let u: URL
+  try {
+    u = new URL(raw)
+  } catch {
+    return null
+  }
+  if (!isHttpUrl(u)) return null
+  u.hash = ''
+  if ((u.protocol === 'http:' && u.port === '80') || (u.protocol === 'https:' && u.port === '443')) u.port = ''
+  const kept: Array<[string, string]> = []
+  for (const [key, value] of u.searchParams) {
+    const lower = key.toLowerCase()
+    if (lower.startsWith('utm_') || lower === 'gclid' || lower === 'fbclid' || lower === 'msclkid' || lower === '_ga') continue
+    kept.push([key, value])
+  }
+  kept.sort((a, b) => (a[0] === b[0] ? a[1].localeCompare(b[1]) : a[0].localeCompare(b[0])))
+  u.search = ''
+  for (const [key, value] of kept) u.searchParams.append(key, value)
+  if (u.pathname.length > 1) {
+    const trimmed = u.pathname.replace(/\/+$/, '')
+    u.pathname = trimmed === '' ? '/' : trimmed
+  }
+  return { url: u.toString(), endpoint: `${u.host}${u.pathname}` }
+}
+
+/** Extrait les URL http(s) d'une ligne de log ou de sortie d'outil. */
+function extractUrls(line: string): string[] {
+  const matches = line.match(/https?:\/\/[^\s<>"'`[\]{}\\^|]+/g)
+  if (!matches) return []
+  return matches
+    .map((raw) => raw.replace(/[.,;:!?'")\]}>]+$/, ''))
+    .filter((raw) => raw.length > 'https://'.length)
+}
+
 const DENY_TOOLS = new Set([
-  'cmd', 'powershell', 'pwsh', 'mshta', 'rundll32', 'regsvr32', 'certutil',
-  'bitsadmin', 'wscript', 'cscript', 'winget',
-  'sh', 'bash', 'zsh', 'ksh', 'dash', 'busybox', 'env', 'eval', 'xargs',
+  // Telechargeurs et lanceurs indirects : contournent le controle d'integrite
+  // des outils du catalogue ou executent du code hors du couple argv/suivi.
+  'mshta', 'rundll32', 'regsvr32', 'certutil', 'bitsadmin',
+  'wscript', 'cscript', 'winget', 'eval', 'xargs',
+  // PowerShell reste refuse : equivalent de shell systeme sur Windows, et
+  // dispose de.cmdlets d'execution memoire que le suivi d'argv ne couvre pas.
+  'cmd', 'powershell', 'pwsh',
 ])
 const SAFE_TOOLS = new Set([
-  'node', 'python', 'python3', 'pip', 'git', 'tar', 'curl', 'wget', 'jq', 'rg', 'yq', 'go',
+  // Interpretation et langages
+  'node', 'python', 'python3', 'python2', 'py', 'nodejs', 'php', 'ruby', 'perl', 'java', 'dotnet',
+  'go', 'rustc', 'deno', 'bun',
+  // Coquilles et utilitaires systeme
+  'sh', 'bash', 'zsh', 'ksh', 'dash', 'busybox', 'env',
+  'git', 'tar', 'jq', 'yq', 'rg', 'fd', 'make', 'cmake', 'gcc', 'cl',
+  // Reseau et web
+  'curl', 'wget', 'http', 'httpie', 'ping', 'dig', 'nslookup', 'host', 'whois', 'traceroute', 'tracert',
+  'netstat', 'ss', 'ip', 'ifconfig', 'openssl', 'nc', 'ncat', 'socat',
+  // Fichiers et texte
+  'cat', 'head', 'tail', 'wc', 'sort', 'uniq', 'cut', 'tr', 'tee', 'sed', 'awk', 'grep', 'find',
+  'ls', 'mkdir', 'cp', 'mv', 'rm', 'touch', 'chmod', 'base64', 'xxd', 'diff', 'patch',
+  // Analyse
+  'strings', 'file', 'stat', 'du', 'df',
 ])
 
 function isAllowedRunTool(tool: string): boolean {
@@ -76,7 +467,8 @@ const runToolDef: McpToolDef = {
   name: 'run_tool',
   description:
     'Exécute un binaire du catalogue BountyDesk (portable dans le dossier tools de BountyDesk, ou binaire PATH comme'
-    + ' nmap/ffuf) ou un binaire système de confiance (node, python, git, tar, curl, jq, rg, yq, go). Arguments libres'
+    + ' nmap/ffuf) ou un binaire système de confiance (interpréteurs : node, python, php, ruby, perl, java, go ;'
+    + ' coquilles : sh, bash ; réseau : curl, wget, openssl, dig ; fichiers : cat, grep, sed, awk, find).'
     + ' en une chaîne, cwd optionnel (doit être sous le dossier tools de BountyDesk), timeout par défaut 120 s. Toute'
     + ' invocation est journalisée (Activité des IA). À n’utiliser que sur des cibles autorisées, dans le scope et selon les ROE.',
   inputSchema: {
@@ -112,7 +504,9 @@ const runToolDef: McpToolDef = {
       } catch {
         return { text: 'cwd invalide : n’existe pas', isError: true }
       }
-      if (!lower.startsWith(toolsRoot.toLowerCase())) {
+      const root = toolsRoot.toLowerCase().replace(/[\\/]+$/, '')
+      const insideRoot = lower === root || lower.startsWith(root + '\\') || lower.startsWith(root + '/')
+      if (!insideRoot) {
         return { text: 'cwd hors périmètre autorisé (dossier tools BountyDesk)', isError: true }
       }
       cwd = abs
@@ -227,6 +621,87 @@ const TOOL_DEFS: McpToolDef[] = [
     },
   },
   {
+    name: 'set_note',
+    description: 'Ajoute une note horodatée à un programme (ajout seul : le contenu existant n’est jamais écrasé).'
+      + ' Stockage : le champ texte de note du programme, ce n’est pas une table de notes dédiée — une vraie table'
+      + ' (historique, recherche) serait plus adaptée mais n’existe pas encore. Plafond : 4 000 caractères par note,'
+      + ' 20 000 au total par programme. N’écrit rien d’autre que cette note.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        programId: { ...STR, description: 'identifiant du programme (champ id de list_programs)' },
+        text: { ...STR, description: 'texte de la note, 1-4000 caractères' },
+      },
+      required: ['programId', 'text'],
+    },
+    handler: async (args) => {
+      const repo = getRepository()
+      const programId = asString(args.programId)
+      if (!programId) return { text: 'programId requis (chaîne 1-200)', isError: true }
+      const text = asString(args.text, 4000)
+      if (!text) return { text: 'text requis (chaîne 1-4000)', isError: true }
+      const program = repo.getProgram(programId)
+      if (!program) return { text: `Programme introuvable : ${programId}`, isError: true }
+      const entry = `- [${new Date().toISOString()}] ${text.replace(/\r?\n/g, ' ')}`
+      const existing = program.note ?? ''
+      const merged = existing === '' ? entry : `${existing.replace(/\s+$/, '')}\n${entry}`
+      if (merged.length > NOTE_MAX_CHARS) {
+        return {
+          text: `Note refusée : le total dépasserait ${NOTE_MAX_CHARS} caractères (actuel ${existing.length}).`
+            + ' Aucun caractère n’a été supprimé : archivez ou effacez la note depuis l’interface avant de continuer.',
+          isError: true,
+        }
+      }
+      repo.setNote(programId, merged)
+      const entries = merged.split('\n').filter((line) => NOTE_LINE.test(line)).length
+      return { text: JSON.stringify({ programId, entries, chars: merged.length }, null, 2), details: { programId, entries } }
+    },
+  },
+  {
+    name: 'list_notes',
+    description: 'Relit les notes d’un programme (champ note du programme) sous forme d’entrées horodatées,'
+      + ' de la plus ancienne à la plus récente. Lecture seule.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        programId: { ...STR, description: 'identifiant du programme' },
+        limit: { type: 'integer', minimum: 1, maximum: 200, description: 'nombre d’entrées à renvoyer (défaut 50)' },
+      },
+      required: ['programId'],
+    },
+    handler: async (args) => {
+      const repo = getRepository()
+      const programId = asString(args.programId)
+      if (!programId) return { text: 'programId requis (chaîne 1-200)', isError: true }
+      const limit = args.limit === undefined ? 50 : asInt(args.limit, 1, 200)
+      if (limit === null) return { text: 'limit doit être un entier entre 1 et 200', isError: true }
+      const program = repo.getProgram(programId)
+      if (!program) return { text: `Programme introuvable : ${programId}`, isError: true }
+      const all = (program.note ?? '')
+        .split('\n')
+        .map((line) => NOTE_LINE.exec(line))
+        .filter((m): m is RegExpExecArray => m !== null)
+        .map((m) => ({ ts: m[1]!, text: m[2]!.trim() }))
+      const entries = all.slice(Math.max(0, all.length - limit))
+      return {
+        text: JSON.stringify(
+          {
+            programId,
+            handle: program.handle,
+            name: program.name,
+            storage: 'champ note du programme (table de notes dédiée non disponible)',
+            total: all.length,
+            returned: entries.length,
+            entries,
+          },
+          null,
+          2,
+        ),
+        details: { programId, total: all.length },
+      }
+    },
+  },
+  {
     name: 'list_tools',
     description: "État d'installation des outils bug bounty du catalogue BountyDesk (nmap, nuclei, ffuf, gobuster, etc.)."
       + ' Retourne pour chaque outil si le binaire est installé.',
@@ -256,6 +731,117 @@ const TOOL_DEFS: McpToolDef[] = [
     },
   },
   runToolDef,
+  {
+    name: 'open_browser',
+    description: "Ouvre le navigateur intégré de l'onglet Assistant (une seule fenêtre au lieu d'empiler des onglets)"
+      + ' et y affiche une URL. Ouvre une page d\'accueil si url est omis. Seuls http et https sont acceptés.'
+      + " Le site est rendu dans une iframe sandboxée : il ne peut soumettre aucun rapport ni appeler l'API de BountyDesk."
+      + ' Utilise-le pour lire une doc, un scope ou un advisory. Ne l\'utilise jamais pour soumettre quoi que ce soit.',
+    inputSchema: {
+      type: 'object',
+      properties: { url: { ...STR, description: 'URL absolue http(s) à afficher (optionnelle)' } },
+    },
+    handler: async (args) => {
+      const url = asString(args.url, 2000) ?? undefined
+      const res = openBrowserWindow(url)
+      if (!res.ok) return { text: res.error ?? 'Ouverture du navigateur impossible', isError: true }
+      return {
+        text: `Navigateur intégré ouvert${url ? ` sur ${url}` : ''}. Aucun accès privilégié pour la page distante : aucun rapport ne peut y être soumis.`,
+        details: { opened: true, url: url ?? null },
+      }
+    },
+  },
+  {
+    name: 'fetch_page',
+    description: 'GET sur une URL http(s) et retour du texte lisible (balises, scripts, styles et commentaires retirés),'
+      + ' pour lire une politique de programme, un scope ou un advisory sans passer par le navigateur.'
+      + ' GET uniquement : aucune soumission, aucun envoi de formulaire, aucun rapport possible.'
+      + ' Aucun cookie, aucun header Authorization, aucun identifiant stocké n’est transmis : la requête est anonyme.'
+      + ' Bornes : http(s) uniquement (file://, ftp:// et autres refusés), 1 MiB de réponse par défaut (max 2 MiB),'
+      + ' 40 000 caractères rendus (max 200 000), 15 s de délai, 5 redirections maximum.'
+      + ' À n’utiliser que sur des pages publiques ou explicitement autorisées par les ROE du programme.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        url: { ...STR, description: 'URL absolue http(s) à lire' },
+        maxBytes: { type: 'integer', minimum: 1024, maximum: 2_097_152, description: 'octets maximum lus, défaut 1 MiB' },
+        maxChars: { type: 'integer', minimum: 500, maximum: 200_000, description: 'caractères maximum rendus, défaut 40000' },
+      },
+      required: ['url'],
+    },
+    handler: async (args) => {
+      const raw = asString(args.url, 2000)
+      if (!raw) return { text: 'url requis (chaîne 1-2000)', isError: true }
+      let parsed: URL
+      try {
+        parsed = new URL(raw)
+      } catch {
+        return { text: `URL invalide : ${raw}`, isError: true }
+      }
+      if (!isHttpUrl(parsed)) {
+        return { text: `Protocole refusé (${parsed.protocol}) : seuls http et https sont acceptés`, isError: true }
+      }
+      const maxBytes = args.maxBytes === undefined ? 1_048_576 : asInt(args.maxBytes, 1024, 2_097_152)
+      if (maxBytes === null) return { text: 'maxBytes doit être un entier entre 1024 et 2097152', isError: true }
+      const maxChars = args.maxChars === undefined ? 40_000 : asInt(args.maxChars, 500, 200_000)
+      if (maxChars === null) return { text: 'maxChars doit être un entier entre 500 et 200000', isError: true }
+      const res = await fetchPageText(parsed.toString(), maxBytes)
+      if (!res.ok) return { text: res.error, isError: true }
+      const contentType = res.contentType
+      const textual = contentType === '' || /^text\/|json|xml|javascript|\+xml/i.test(contentType)
+      if (!textual) {
+        return { text: `Type de contenu non textuel (${contentType}) : fetch_page ne rend que du texte`, isError: true }
+      }
+      const isHtml = /html/i.test(contentType) || /^\s*(<!doctype\s+html|<html)\b/i.test(res.raw)
+      const text = isHtml ? htmlToText(res.raw) : decodeEntities(res.raw)
+      const clipped = text.length > maxChars ? text.slice(0, maxChars) : text
+      return {
+        text: JSON.stringify(
+          {
+            url: res.url,
+            finalUrl: res.finalUrl,
+            status: res.status,
+            contentType: contentType || null,
+            format: isHtml ? 'html' : 'texte',
+            bytesRead: res.bytes,
+            truncated: res.truncated || clipped.length < text.length,
+            chars: clipped.length,
+            text: clipped,
+          },
+          null,
+          2,
+        ),
+        details: { url: res.url, finalUrl: res.finalUrl, status: res.status, chars: clipped.length },
+      }
+    },
+  },
+  {
+    name: 'list_scans',
+    description: 'Historique des scans lancés par start_scan pour un programme : identifiant, profondeur, statut'
+      + ' (running/done/stopped/error), rate limit appliqué, dates. Lecture seule, ne lance rien.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        programId: { ...STR, description: 'identifiant du programme' },
+        limit: { type: 'integer', minimum: 1, maximum: 100, description: 'nombre de scans renvoyés, défaut 20' },
+      },
+      required: ['programId'],
+    },
+    handler: async (args) => {
+      const programId = asString(args.programId)
+      if (!programId) return { text: 'programId requis (chaîne 1-200)', isError: true }
+      const limit = args.limit === undefined ? 20 : asInt(args.limit, 1, 100)
+      if (limit === null) return { text: 'limit doit être un entier entre 1 et 100', isError: true }
+      const scans = getRepository()
+        .listScans(programId)
+        .slice(0, limit)
+        .map((s) => ({
+          id: s.id, depth: s.depth, status: s.status, rateLimit: s.rate_limit,
+          roeConfirm: s.roe_confirm === 1, startedAt: s.started_at, finishedAt: s.finished_at,
+        }))
+      return { text: JSON.stringify({ programId, count: scans.length, scans }, null, 2), details: { count: scans.length } }
+    },
+  },
   {
     name: 'start_scan',
     description: "Lance un scan automatisé d'un programme selon les règles d'engagement : profils low/med/high"
@@ -359,6 +945,139 @@ const TOOL_DEFS: McpToolDef[] = [
       const afterSeq = asInt(args.afterSeq, 0, 1_000_000) ?? 0
       const events = repo.listScanEvents(scanId, afterSeq).map((r) => ({ seq: r.seq, ts: r.ts, level: r.level, message: r.message }))
       return { text: JSON.stringify({ events, done: scan.status !== 'running' }, null, 2) }
+    },
+  },
+  {
+    name: 'dedupe_findings',
+    description: 'Normalise et dédoublonne des résultats bruts : extrait les URL http(s) de la sortie d’un scan'
+      + ' (événements curl/nuclei/ffuf via scan_events) ou d’un texte collé, puis les regroupe par endpoint'
+      + ' (hôte + chemin). Canonicalisation : casse de l’hôte, port par défaut, fragment et paramètres de suivi'
+      + ' (utm_*, gclid, fbclid, msclkid, _ga) supprimés, query triée, slash final normalisé.'
+      + ' Lecture seule, purely local : n’Envoie aucune requête et ne touche pas aux cibles. Plafonds : 500 événements'
+      + ' de scan ou 500 lignes, 2000 caractères par ligne, 200 endpoints renvoyés.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        scanId: { ...INT, description: 'scan dont les événements servent de source (voir list_scans)' },
+        lines: {
+          type: 'array',
+          items: { type: 'string' },
+          maxItems: 500,
+          description: 'lignes de résultat brutes à analyser (alternative à scanId)',
+        },
+      },
+    },
+    handler: async (args) => {
+      const repo = getRepository()
+      const scanId = args.scanId === undefined ? null : asInt(args.scanId, 1, Number.MAX_SAFE_INTEGER)
+      if (args.scanId !== undefined && scanId === null) return { text: 'scanId doit être un entier positif', isError: true }
+      const rawLines = Array.isArray(args.lines) ? args.lines : []
+      if (Array.isArray(args.lines) && rawLines.length > 500) return { text: 'lines : 500 lignes maximum', isError: true }
+      if (scanId === null && rawLines.length === 0) {
+        return { text: 'Fournir scanId ou lines : au moins une source de résultats est requise', isError: true }
+      }
+
+      const sources: Array<{ ref: string; line: string }> = []
+      if (scanId !== null) {
+        const scan = repo.getScan(scanId)
+        if (!scan) return { text: `Scan introuvable (id=${scanId})`, isError: true }
+        for (const ev of repo.listScanEvents(scanId, 0, 500)) {
+          sources.push({ ref: `seq:${ev.seq}`, line: ev.message })
+        }
+      }
+      for (const [i, line] of rawLines.entries()) {
+        if (typeof line === 'string' && line.trim() !== '') sources.push({ ref: `ligne:${i + 1}`, line: line.slice(0, 2000) })
+      }
+
+      const groups = new Map<string, { endpoint: string; occurrences: number; variants: Set<string>; firstRef: string }>()
+      const variantsTotal = new Set<string>()
+      let found = 0
+      for (const src of sources) {
+        for (const rawUrl of extractUrls(src.line)) {
+          const canon = canonicalizeUrl(rawUrl)
+          if (!canon) continue
+          found += 1
+          variantsTotal.add(canon.url)
+          const group = groups.get(canon.endpoint)
+          if (group) {
+            group.occurrences += 1
+            group.variants.add(canon.url)
+          } else {
+            groups.set(canon.endpoint, {
+              endpoint: canon.endpoint,
+              occurrences: 1,
+              variants: new Set([canon.url]),
+              firstRef: src.ref,
+            })
+          }
+        }
+      }
+
+      const ordered = [...groups.values()].sort((a, b) => b.occurrences - a.occurrences || a.endpoint.localeCompare(b.endpoint))
+      const endpoints = ordered.slice(0, 200).map((g) => ({
+        endpoint: g.endpoint,
+        occurrences: g.occurrences,
+        distinctUrls: g.variants.size,
+        firstSeen: g.firstRef,
+        urls: [...g.variants].slice(0, 20),
+      }))
+      return {
+        text: JSON.stringify(
+          {
+            scanId,
+            linesScanned: sources.length,
+            urlsExtracted: found,
+            uniqueUrls: variantsTotal.size,
+            endpointsReturned: endpoints.length,
+            endpointsOmitted: Math.max(0, ordered.length - endpoints.length),
+            urlsTruncatedInGroups: ordered.some((g) => g.variants.size > 20),
+            endpoints,
+          },
+          null,
+          2,
+        ),
+        details: { urlsExtracted: found, uniqueUrls: variantsTotal.size, endpoints: ordered.length },
+      }
+    },
+  },
+  {
+    name: 'cvss_score',
+    description: 'Calcule le score de base CVSS v3.1 d’un vecteur (AV/AC/PR/UI/S/C/I/A) et renvoie score, sévérité'
+      + ' et sous-scores Impact / Exploitabilité. Calcul pur et local, aucun appel réseau, aucun envoi.'
+      + ' Les métriques temporelles et environnementales (E, RL, RC, CR/IR/AR, M*) sont acceptées mais ignorées :'
+      + ' elles sont listées dans ignoredMetrics. Le préfixe « CVSS:3.1/ » est recommandé ; « CVSS:3.0 » est accepté'
+      + ' (mêmes poids de base). Vecteur invalide ou métrique manquante => erreur, jamais de score estimé.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        vector: { ...STR, description: 'vecteur CVSS, ex. CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H' },
+      },
+      required: ['vector'],
+    },
+    handler: async (args) => {
+      const vector = asString(args.vector, 300)
+      if (!vector) return { text: 'vector requis (chaîne 1-300)', isError: true }
+      const out = computeCvssBase(vector)
+      if (!out.ok) return { text: `Vecteur CVSS invalide : ${out.error}`, isError: true }
+      return {
+        text: JSON.stringify(
+          {
+            input: out.input,
+            baseVector: out.baseVector,
+            version: out.version,
+            baseScore: out.baseScore,
+            severity: out.severity,
+            metrics: out.metrics,
+            impactSubScore: out.iss,
+            impact: out.impact,
+            exploitability: out.exploitability,
+            ignoredMetrics: out.ignoredMetrics,
+          },
+          null,
+          2,
+        ),
+        details: { baseScore: out.baseScore, severity: out.severity },
+      }
     },
   },
 ]

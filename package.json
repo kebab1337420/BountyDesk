@@ -40,5 +40,9 @@
     "vite": "^7.3.6",
     "vitest": "^5.0.1"
   },
-  "desktopName": "BountyDesk"
+  "desktopName": "BountyDesk",
+  "allowScripts": {
+    "esbuild@0.25.12": true,
+    "esbuild@0.28.2": true
+  }
 }

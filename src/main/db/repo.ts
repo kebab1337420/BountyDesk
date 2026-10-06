@@ -574,6 +574,31 @@ export class Repository {
       .run(scanId, seq, ts, level, message)
   }
 
+  /**
+   * Lot d'événements dans une seule transaction. Un outil bavard (ffuf, nuclei)
+   * produit des centaines de lignes par seconde : un INSERT par chunk bloquait
+   * l'événements du process principal et faisait vaciller toute l'interface.
+   */
+  appendScanEvents(
+    scanId: number,
+    rows: { seq: number; level: string; message: string; ts: number }[]
+  ): void {
+    if (rows.length === 0) return
+    const stmt = this.db.prepare('INSERT INTO scan_events (scan_id, seq, ts, level, message) VALUES (?, ?, ?, ?, ?)')
+    this.db.exec('BEGIN')
+    try {
+      for (const row of rows) stmt.run(scanId, row.seq, row.ts, row.level, row.message)
+      this.db.exec('COMMIT')
+    } catch (err) {
+      try {
+        this.db.exec('ROLLBACK')
+      } catch {
+        /* transaction déjà refermée par SQLite */
+      }
+      throw err
+    }
+  }
+
   countScanEvents(scanId: number): number {
     const row = this.db.prepare('SELECT COUNT(*) AS n FROM scan_events WHERE scan_id = ?').get(scanId) as unknown as {
       n: number
