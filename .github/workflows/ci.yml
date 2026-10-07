@@ -253,7 +253,8 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $setup = (Resolve-Path 'dist\BountyDesk-Setup-0.1.0.exe').Path
+          # Wildcard : le nom porte la version de package.json, qui change a chaque release.
+          $setup = (Resolve-Path 'dist\BountyDesk-Setup-*.exe' | Select-Object -First 1).Path
           $p = Start-Process -FilePath $setup -ArgumentList '/S' -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "installateur sorti en $($p.ExitCode)" }
           $exe = Join-Path $env:LOCALAPPDATA 'Programs\BountyDesk\BountyDesk.exe'
