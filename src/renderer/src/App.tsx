@@ -82,12 +82,24 @@ export function App() {
   // Les écrans visités restent montés : changer de section devient instantané,
   // et filtres/scroll/états locaux survivent aux allers-retours.
   const [visited, setVisited] = useState<Section[]>(['programs'])
+  const [statusCheck, setStatusCheck] = useState(0)
+  const [statusError, setStatusError] = useState(false)
 
   useEffect(() => {
-    void Api.auth.status().then((status) => {
-      setView(status.configured ? 'app' : 'login')
-    })
-  }, [])
+    let cancelled = false
+    setStatusError(false)
+    void Api.auth.status()
+      .then((status) => {
+        if (!cancelled) setView(status.configured ? 'app' : 'login')
+      })
+      .catch(() => {
+        // Sans ce catch, un rejet IPC laisserait l'écran figé sur « Chargement… ».
+        if (!cancelled) setStatusError(true)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [statusCheck])
 
   const logout = (): void => {
     void Api.auth.logout()
@@ -104,6 +116,16 @@ export function App() {
       <div className="splash">
         <span className="brand-mark pulse">◮</span>
         <span className="brand-name">BountyDesk</span>
+        {statusError ? (
+          <div style={{ textAlign: 'center' }}>
+            <p>Impossible de vérifier la session locale.</p>
+            <button className="btn primary" onClick={() => setStatusCheck((n) => n + 1)}>
+              Réessayer
+            </button>
+          </div>
+        ) : (
+          <p className="muted">Chargement…</p>
+        )}
       </div>
     )
   }
