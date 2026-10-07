@@ -5,7 +5,7 @@ export interface ToolDefinition {
   name: string
   description: string
   category: ToolCategory
-  source: 'winget' | 'github' | 'git' | 'pip'
+  source: 'winget' | 'github' | 'git' | 'pip' | 'go'
   wingetId?: string
   githubRepo?: string
   githubAsset?: string
@@ -14,6 +14,12 @@ export interface ToolDefinition {
   githubAssetLinux?: string
   /** Nom réel du binaire dans l'archive quand il diffère de l'id. */
   exeName?: string
+  /**
+   * Module Go installé par `go install <module>@latest` quand source === 'go'.
+   * Le binaire est déposé dans un dossier isolé tools/<id> (GOBIN), comme pour
+   * pip : rien n'atteint le GOPATH global de l'utilisateur.
+   */
+  goPackage?: string
   /** Paquet Debian/Ubuntu pour installer cet outil sous Linux. */
   aptPackage?: string
   /**
@@ -352,8 +358,9 @@ export const TOOL_CATALOG: ToolDefinition[] = [
     name: 'gauplus',
     description: 'Wrapper de gau avec vérification des URLs via Check-Host',
     category: 'recon',
-    source: 'git',
+    source: 'go',
     githubRepo: 'bp0lr/gauplus',
+    goPackage: 'github.com/bp0lr/gauplus',
     defaultChecked: false
   },
   {
@@ -478,8 +485,9 @@ export const TOOL_CATALOG: ToolDefinition[] = [
     name: 'gospider',
     description: 'Crawler web rapide en Go (endpoints, JS, formulaires)',
     category: 'recon',
-    source: 'git',
+    source: 'go',
     githubRepo: 'jaeles-project/gospider',
+    goPackage: 'github.com/jaeles-project/gospider',
     defaultChecked: false
   },
   {
@@ -543,8 +551,9 @@ export const TOOL_CATALOG: ToolDefinition[] = [
     name: 'hakrawler',
     description: 'Crawler OSINT : e-mails, comptes, dépôts, usernames',
     category: 'recon',
-    source: 'git',
+    source: 'go',
     githubRepo: 'hakluke/hakrawler',
+    goPackage: 'github.com/hakluke/hakrawler',
     defaultChecked: false
   },
   {
@@ -579,8 +588,9 @@ export const TOOL_CATALOG: ToolDefinition[] = [
     name: 'haktrails',
     description: 'Historique des sous-domaines via l’API SecurityTrails',
     category: 'recon',
-    source: 'git',
+    source: 'go',
     githubRepo: 'hakluke/haktrails',
+    goPackage: 'github.com/hakluke/haktrails',
     defaultChecked: false
   },
   {
@@ -1344,8 +1354,9 @@ export const TOOL_CATALOG: ToolDefinition[] = [
     name: 'fff',
     description: 'Trouve rapidement les fichiers volumineux dans une arborescence',
     category: 'utility',
-    source: 'git',
+    source: 'go',
     githubRepo: 'tomnomnom/fff',
+    goPackage: 'github.com/tomnomnom/fff',
     defaultChecked: false
   },
   {

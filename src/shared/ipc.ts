@@ -221,7 +221,7 @@ export interface ToolEntry {
   name: string
   description: string
   category: string
-  source: 'winget' | 'github' | 'git' | 'pip'
+  source: 'winget' | 'github' | 'git' | 'pip' | 'go'
   installed: boolean
   defaultChecked: boolean
   docs?: string

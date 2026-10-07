@@ -188,9 +188,20 @@ function killOnTimeout(child: ReturnType<typeof spawn>, ms: number): () => boole
   }
 }
 
-function run(cmd: string, args: string[], onOutput?: (line: string) => void, timeoutMs = RUN_TIMEOUT_MS): Promise<number> {
+function run(
+  cmd: string,
+  args: string[],
+  onOutput?: (line: string) => void,
+  timeoutMs = RUN_TIMEOUT_MS,
+  env?: Record<string, string>
+): Promise<number> {
   return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { windowsHide: true, shell: false, cwd: toolsDir() })
+    const child = spawn(cmd, args, {
+      windowsHide: true,
+      shell: false,
+      cwd: toolsDir(),
+      env: env ? { ...process.env, ...env } : undefined
+    })
     const timedOut = killOnTimeout(child, timeoutMs)
     child.stdout?.on('data', (b: Buffer) => onOutput?.(b.toString()))
     child.stderr?.on('data', (b: Buffer) => onOutput?.(b.toString()))
@@ -334,6 +345,11 @@ export async function isInstalled(tool: ToolDefinition): Promise<boolean> {
   }
   if (tool.source === 'git') {
     return existsSync(join(gitPkgPath(tool.id), MARKER))
+  }
+  if (tool.source === 'go') {
+    // go install pose le binaire dans GOBIN = tools/<id> : détection identique
+    // à une archive portable téléchargée.
+    return hasPortableBinary(toolsDir(), tool)
   }
   if (tool.source === 'pip') {
     return existsSync(pipScriptPath(tool))
@@ -642,6 +658,49 @@ function readdirRecursive(dir: string): string[] {
   return out
 }
 
+/**
+ * Installe un outil Go via `go install <module>@latest` avec GOBIN dirigé vers
+ * tools/<id> : le binaire atterrit exactement là où resolveBinary et
+ * hasPortableBinary le cherchent pour une source portable, sans toucher au
+ * GOPATH global. Rien n'est exécuté en dehors de la toolchain Go elle-même.
+ */
+async function installGo(tool: ToolDefinition, onOutput: (line: string) => void): Promise<void> {
+  const pkg = tool.goPackage
+  if (!pkg) throw new Error(`goPackage absent du catalogue pour ${tool.id}`)
+
+  let probe = -1
+  try {
+    probe = await run('go', ['version'], undefined, DETECT_TIMEOUT_MS)
+  } catch {
+    probe = -1
+  }
+  if (probe !== 0) {
+    throw new Error(
+      'Go introuvable sur cette machine : installez l’outil Go du catalogue (source winget), puis relancez.'
+    )
+  }
+
+  const binDir = join(toolsDir(), tool.id)
+  mkdirSync(binDir, { recursive: true })
+  onOutput(`go install ${pkg}…`)
+  const code = await withSystemInstallLock(() =>
+    run('go', ['install', pkg], onOutput, RUN_TIMEOUT_MS, { GOBIN: binDir })
+  )
+  if (code === TIMEOUT_CODE) throw new Error('go install : délai dépassé (5 min)')
+  if (code !== 0) throw new Error(`go install a échoué (code ${code})`)
+
+  const binary = join(binDir, portableBinaryName(tool.id, tool.exeName))
+  if (!existsSync(binary)) {
+    const found = readdirSync(binDir).join(', ') || '(aucun fichier)'
+    throw new Error(
+      `Binaire ${portableBinaryName(tool.id, tool.exeName)} introuvable après go install.`
+      + ` Fichiers produits : ${found}.`
+      + ' Renseignez exeName dans le catalogue si le binaire porte un autre nom.'
+    )
+  }
+  onOutput(`Installé : ${basename(binary)}`)
+}
+
 async function installGit(tool: ToolDefinition, onOutput: (line: string) => void): Promise<void> {
   if (!tool.githubRepo) throw new Error('Référence GitHub manquante')
   const dest = gitPkgPath(tool.id)
@@ -742,6 +801,10 @@ export async function installTool(id: string, onOutput?: (line: string) => void)
     }
     if (tool.source === 'pip') {
       await installPip(tool, onOutput ?? (() => {}))
+      return { ok: true, installed: await isInstalled(tool) }
+    }
+    if (tool.source === 'go') {
+      await installGo(tool, onOutput ?? (() => {}))
       return { ok: true, installed: await isInstalled(tool) }
     }
     if (tool.source === 'winget' && tool.wingetId) {
