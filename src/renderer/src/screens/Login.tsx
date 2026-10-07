@@ -40,7 +40,13 @@ export function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) {
         />
         {error && <p className="error">{error}</p>}
         <button type="submit" disabled={!valid || busy}>
-          {busy ? 'Vérification…' : 'Tester et se connecter'}
+          {busy ? (
+            <>
+              <span className="spinner" aria-hidden="true" /> Vérification…
+            </>
+          ) : (
+            'Tester et se connecter'
+          )}
         </button>
       </form>
     </div>
