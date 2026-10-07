@@ -178,6 +178,9 @@ async function selfTest(): Promise<McpDiagnoseInfo['selfTest']> {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
       body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'ping' }),
+      // Sans plafond, un serveur qui accepte sans répondre bloquerait
+      // indéfiniment la promesse IPC `mcp:diagnose`.
+      signal: AbortSignal.timeout(5000),
     })
     const body = await res.text()
     const ok = res.status === 200 && body.includes('jsonrpc')
@@ -294,12 +297,15 @@ async function restartIfRunning(cfg: {
   const primary = cfg.tokens[0]?.token
   if (!primary) return
   const target = info.port ?? cfg.port ?? DEFAULT_PORT
-  await startMcpServer(target, primary, {
+  const started = await startMcpServer(target, primary, {
     lan: cfg.lan,
     tokens: cfg.tokens.map((t) => t.token),
     tokenLabels: withLabels(cfg.tokens),
     agentTokens: cfg.agents ?? [],
   })
+  // Le redémarrage échoue (port pris ?) : il faut le dire, sinon l'utilisateur
+  // croit son nouveau jeton actif alors que le serveur tourne encore à l'ancien.
+  if (!started.ok) throw new Error(started.error)
 }
 
 export function registerMcpIpc(): void {
@@ -667,6 +673,9 @@ export function restoreAutostartMcp(): void {
       tokens: cfg.tokens.map((t) => t.token),
       tokenLabels: withLabels(cfg.tokens),
       agentTokens: cfg.agents ?? [],
+    }).catch((err: unknown) => {
+      // Jamais de rejection silencieuse au démarrage (port occupé, etc.).
+      console.error('BountyDesk : démarrage automatique du serveur MCP échoué :', err)
     })
   }
 }

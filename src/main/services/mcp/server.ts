@@ -9,11 +9,13 @@ import { getClient } from '../../app-state'
 import { getRepository } from '../../db'
 import { fetchProgramDetail, getCachedProgramDetail } from '../program-detail'
 import { buildPlan, selectTargets, MAX_TARGETS } from '../scan/plan'
-import { activeScanCount, activeScanForProgram, startScan } from '../scan/runner'
+import { activeScanCount, activeScanForProgram, killTree, startScan } from '../scan/runner'
 import { getTool, TOOL_CATALOG } from '../tools/catalog'
 import { currentTools, installTool, resolveBinary, toolsDir } from '../tools/installer'
 import { attachAgentsToServer, closeAgents, configureAgents, type AgentAuthEntry } from './agents'
 import { openBrowserWindow } from '../../ipc-browser'
+// Version réelle du paquet : une constante en dur dérive dès le premier bump.
+import pkg from '../../../../package.json'
 
 const PROTOCOL_VERSION = '2024-11-05'
 const MAX_BODY = 1024 * 1024
@@ -527,7 +529,9 @@ const runToolDef: McpToolDef = {
       let timedOut = false
       const timer = setTimeout(() => {
         timedOut = true
-        try { child.kill() } catch { /* ignore */ }
+        // child.kill() ne touche que le pid direct : curl, git et les outils du
+        // catalogue lancent des sous-processus qui resteraient orphelins.
+        killTree(child)
       }, timeout * 1000)
       child.stdout?.on('data', (b: Buffer) => {
         stdout += b.toString()
@@ -559,23 +563,36 @@ const TOOL_DEFS: McpToolDef[] = [
   {
     name: 'list_programs',
     description: "Liste les programmes bug bounty du catalogue local (BountyDesk). Recherche par nom/handle et filtre favoris."
-      + ' Retourne les enregistrements de programmes (prime min/max, statut, tags, groupes, favori).',
+      + ' Retourne les enregistrements de programmes (prime min/max, statut, tags, groupes, favori).'
+      + ' Paginé : au-delà de 200 programmes, préciser offset pour lire la suite (total et hasMore sont dans details).',
     inputSchema: {
       type: 'object',
-      properties: { search: { ...STR, description: 'filtre texte sur nom, handle ou industrie' }, favoriteOnly: BOOL },
+      properties: {
+        search: { ...STR, description: 'filtre texte sur nom, handle ou industrie' },
+        favoriteOnly: BOOL,
+        limit: { ...INT, minimum: 1, maximum: 200, description: 'taille de page (défaut 200)' },
+        offset: { ...INT, minimum: 0, description: 'décalage dans le résultat (défaut 0)' },
+      },
     },
     handler: async (args) => {
       const repo = getRepository()
       const search = typeof args.search === 'string' ? args.search.slice(0, 500) : undefined
       const favoriteOnly = args.favoriteOnly === true
-      const { records } = repo.listPrograms({ search, favoriteOnly, limit: 200, offset: 0 })
+      const limit = args.limit === undefined ? 200 : asInt(args.limit, 1, 200)
+      if (limit === null) return { text: 'limit doit être un entier entre 1 et 200', isError: true }
+      const offset = args.offset === undefined ? 0 : asInt(args.offset, 0, 1_000_000)
+      if (offset === null) return { text: 'offset doit être un entier positif', isError: true }
+      const { records, total } = repo.listPrograms({ search, favoriteOnly, limit, offset })
       const out = records.map((r) => ({
         id: r.id, handle: r.handle, name: r.name, status: r.status, type: r.type,
         confidentiality: r.confidentiality, industry: r.industry, webLink: r.webLink,
         following: r.following, favorite: r.favorite, note: r.note || null,
         minBounty: r.minBounty, maxBounty: r.maxBounty, tags: r.tags, groups: r.groups,
       }))
-      return { text: JSON.stringify(out, null, 2), details: { count: out.length } }
+      return {
+        text: JSON.stringify(out, null, 2),
+        details: { count: out.length, total, offset, hasMore: offset + out.length < total },
+      }
     },
   },
   {
@@ -908,7 +925,7 @@ const TOOL_DEFS: McpToolDef[] = [
   },
   {
     name: 'get_scan',
-    description: 'État courant dun scan lancé par start_scan : statut (running/done/stopped/error), profondeur, rate limit.',
+    description: 'État courant d’un scan lancé par start_scan : statut (running/done/stopped/error), profondeur, rate limit.',
     inputSchema: { type: 'object', properties: { scanId: INT }, required: ['scanId'] },
     handler: async (args) => {
       const scanId = asInt(args.scanId, 1, Number.MAX_SAFE_INTEGER)
@@ -1292,7 +1309,7 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
       sendRpcResult(res, id, {
         protocolVersion: PROTOCOL_VERSION,
         capabilities: { tools: {} },
-        serverInfo: { name: 'BountyDesk', version: '0.1.0' },
+        serverInfo: { name: 'BountyDesk', version: pkg.version },
       })
       return
     }
@@ -1341,7 +1358,7 @@ export async function startMcpServer(
   opts?: { lan?: boolean; tokens?: string[]; tokenLabels?: Map<string, string>; agentTokens?: string[] | AgentAuthEntry[] }
 ): Promise<{ ok: true; port: number } | { ok: false; error: string }> {
   await closeServer()
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
     const tokens = opts?.tokens && opts.tokens.length > 0 ? [...opts.tokens] : [token]
     currentTokens = tokens
     tokenLabels = opts?.tokenLabels ? new Map(opts.tokenLabels) : new Map()
@@ -1366,7 +1383,17 @@ export async function startMcpServer(
       currentTokens = []
       tokenLabels = new Map()
       currentLan = false
-      reject({ ok: false, error: err.code === 'EADDRINUSE' ? `Port ${port} déjà utilisé` : err.message })
+      // Le serveur n'a jamais écouté : `server` n'est pas renseigné, donc
+      // closeServer() ne nettoiera pas les timers/WSS montés par
+      // attachAgentsToServer — on les referme ici, sinon ils restent actifs.
+      closeAgents()
+      // Résolution et non rejection : l'appelant (McpSetEnabled) lit
+      // `started.ok`, et un rejet transportant un objet non-Error se
+      // transformait en « [object Object] » côté utilisateur.
+      resolve({
+        ok: false,
+        error: err.code === 'EADDRINUSE' ? `Port ${port} déjà utilisé` : err.message,
+      })
     })
     srv.listen(port, host, () => {
       server = srv

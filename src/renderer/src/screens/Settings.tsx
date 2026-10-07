@@ -102,21 +102,37 @@ export function SettingsScreen({ onLogout }: Props) {
   }
 
   const refresh = async () => {
-    const status = await Api.mcp.status()
-    setMcp(status)
-    setLanLocal(status.lan)
-    if (status.port) setPort(String(status.port))
-    await Promise.all([loadRequests(), loadDiag(), loadMachines(), loadAgents(), loadAgentTokens(), loadSession()])
+    try {
+      const status = await Api.mcp.status()
+      setMcp(status)
+      setLanLocal(status.lan)
+      if (status.port) setPort(String(status.port))
+      await Promise.all([loadRequests(), loadDiag(), loadMachines(), loadAgents(), loadAgentTokens(), loadSession()])
+    } catch {
+      setError('Actualisation impossible (serveur MCP injoignable ?).')
+    }
   }
 
   useEffect(() => {
     void refresh()
+    // Les sessions distantes arrivent d'un appareil externe : sans cet
+    // auto-refresh, une demande « en attente » n'apparaît que si l'utilisateur
+    // clique sur « Actualiser ». 10 s fait aussi défiler le compte à rebours.
+    const timer = setInterval(() => void refresh(), 10_000)
+    return () => clearInterval(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const copy = async (text: string, key: string) => {
-    await navigator.clipboard.writeText(text)
-    setCopied(key)
-    setTimeout(() => setCopied(null), 1500)
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(key)
+      setTimeout(() => setCopied(null), 1500)
+    } catch {
+      // Un refus de permission (navigateur/OS) rejetterait silencieusement
+      // alors que l'utilisateur croit avoir copié.
+      setError('Copie dans le presse-papier refusée.')
+    }
   }
 
   /**
@@ -698,9 +714,13 @@ export function SettingsScreen({ onLogout }: Props) {
                 </details>
 
                 <p className="muted-text">
-                  Tools disponibles : <code>list_programs</code>, <code>get_program_detail</code>,{' '}
-                  <code>list_credentials</code> (sans secrets), <code>list_tools</code>, <code>install_tool</code>,{' '}
-                  <code>start_scan</code>, <code>get_scan</code>, <code>scan_events</code>.
+                  Outils disponibles (16) : <code>list_programs</code> (paginé),{' '}
+                  <code>get_program_detail</code>, <code>list_credentials</code> (sans secret),{' '}
+                  <code>set_note</code>, <code>list_notes</code>, <code>list_tools</code>,{' '}
+                  <code>install_tool</code>, <code>open_browser</code>, <code>fetch_page</code>,{' '}
+                  <code>list_scans</code>, <code>start_scan</code>, <code>get_scan</code>,{' '}
+                  <code>scan_events</code>, <code>dedupe_findings</code>, <code>cvss_score</code>,{' '}
+                  <code>run_tool</code>.
                 </p>
 
                 <div className="mcp-box">
