@@ -1,6 +1,6 @@
 # BountyDesk
 
-Application desktop Windows et Linux pour chasser sur la plateforme de bug bounty **Intigriti** : catalogue de programmes, favoris/groups/tags/notes locaux, veille sur le scope, scans de profondeur low/med/high, catalogue de **277 outils** de pen-test installables, et un serveur MCP local pour piloter le tout depuis une IA (Claude, opencode…).
+Application desktop Windows et Linux pour chasser sur la plateforme de bug bounty **Intigriti** : catalogue de programmes, favoris/groups/tags/notes locaux, veille sur le scope, scans de profondeur low/med/high, catalogue de **286 outils** de pen-test installables, et un serveur MCP local pour piloter le tout depuis une IA (Claude, opencode…).
 
 **BountyDesk est un outil de lecture/assistance. Il ne soumet jamais de rapport automatiquement, et aucun scan n'est lancé sans confirmation explicite des règles d'engagement.**
 
@@ -24,9 +24,11 @@ Autres prérequis communs :
 
 | Plateforme | Artefact | Contenu |
 | --- | --- | --- |
-| Windows | `dist/BountyDesk-Setup-0.1.0.exe` (NSIS) | dossier d'installation au choix, raccourcis bureau et menu démarrer, désinstallation propre |
-| Linux | `dist/bountydesk-0.1.0.AppImage` | auto-portable : `chmod +x` puis lancer, aucun privilège requis |
-| Linux | `dist/bountydesk_0.1.0_amd64.deb` | installation native via `apt install ./bountydesk_0.1.0_amd64.deb` |
+| Windows | `dist/BountyDesk-Setup-<version>.exe` (NSIS) | dossier d'installation au choix, raccourcis bureau et menu démarrer, désinstallation propre |
+| Linux | `dist/bountydesk-<version>.AppImage` | auto-portable : `chmod +x` puis lancer, aucun privilège requis |
+| Linux | `dist/bountydesk_<version>_amd64.deb` | installation native via `apt install ./bountydesk_<version>_amd64.deb` |
+
+`<version>` est la version déclarée dans `package.json` (0.2.0 au moment d'écrire).
 
 Au premier lancement, collez votre token Intigriti : il est testé auprès de l'API puis chiffré au repos (voir [Chiffrement](#chiffrement-au-repos)).
 
@@ -53,10 +55,29 @@ node node_modules/electron/install.js
 | `npm run typecheck` | typecheck TypeScript (main + renderer) |
 | `npm run build` | build `out/` (main, preload, renderer) |
 | `npm run pack:check` | tests + typecheck + build, **sans** empaquetage — la porte à utiliser en CI et sur les deux plateformes |
-| `npm run dist:win` | `pack:check` + installeur NSIS → `dist/BountyDesk-Setup-0.1.0.exe` |
+| `npm run dist:win` | `pack:check` + installeur NSIS → `dist/BountyDesk-Setup-<version>.exe` |
 | `npm run dist:linux` | `pack:check` + AppImage et deb → `dist/` |
 | `npm run dist:all` | les deux plateformes (à lancer sur chaque OS : un AppImage ne se cross-build pas de façon fiable) |
 | `npm run dist` | alias de `dist:win` (compatibilité) |
+| `npm run boite -- <args>` | CLI `boite` — boîte de coordination d'agents (voir ci-dessous) |
+
+### Boîte (CLI d'agents)
+
+`boite` est une boîte à lettres locale pour coordonner des agents (IA ou humains), sans réseau ni politesse : uniquement des tâches et des ressources partagées. Les données vivent dans `~/.boite/boite.db` (surcharge avec `BOITE_DIR`), et les adresses ont la forme `thread-id` (machine locale) ou `machine/thread-id`.
+
+| Commande | Rôle |
+| --- | --- |
+| `boite agents list [--all] [--json]` | état / complétion / pause / archive de chaque agent |
+| `boite agents find <mots...>` | cherche dans les noms, ids, adresses et corps de messages |
+| `boite agents read <adresse>` | transcription du fil (marque les entrées lues) |
+| `boite agents send <adresse> <texte...> [--wait] [--ready] [--ref R] [--project P]` | dépose un message |
+| `boite agents reply <id> <texte...>` | répond à un message précis |
+| `boite agents log <adresse> [--limit N] [--follow]` | journal du fil, en direct |
+| `boite agents wait <adresse> [--timeout S]` | attend la sortie d'un état de travail |
+| `boite agents create <nom>` | crée un agent |
+| `boite agents run / done / edit / pause / resume / archive / restore <adresse>` | transitions d'état |
+
+Codes de sortie : `0` ok, `2` usage, `3` refus (courtoisie/archivé/ready), `4` délai, `5` agent inconnu. `--help` est accepté à n'importe quelle position, et `--json` rend chaque commande exploitable par un autre script.
 
 ### Intégration continue
 
@@ -78,7 +99,8 @@ Le port MCP n'est volontairement pas vérifié par les jobs de smoke test : le s
 ## Fonctionnalités
 
 ### Programmes et sync
-- Écran **Programmes** : liste paginée (recherche avec debounce, filtre favoris, tri nom/prime/récent, sens croissant/décroissant).
+- Écran **Programmes** : liste paginée (recherche avec debounce, filtre favoris, tri nom/prime/récent, sens croissant/décroissant). La page affiche `x / y programmes` et le bouton **Charger la suite** déroule au-delà des 200 premiers — le catalogue n'est plus tronqué en silence.
+- **Exporter** : sélecteur CSV / JSON, avec les **filtres courants** (favori, groupe, tag, recherche), la pagination ignorée. Le fichier est écrit à l'emplacement choisi au système. CSV en UTF-8 avec BOM (Excel l'ouvre sans réglage), cellules échappées à la norme RFC 4180 et préfixées quand elles commenceraient par `=`, `+`, `-` ou `@` (injection de formule).
 - **Synchroniser** importe le catalogue (paginated, limite ~400 requêtes / 5 min gérée par un token bucket, retry en backoff sur 429/5xx).
 - Favoris, groupes, tags et notes : **stockés localement en SQLite**, indépendants de l'API (lecture seule). Base : `%APPDATA%\BountyDesk\bountydesk.db` sous Windows, `~/.config/BountyDesk/bountydesk.db` sous Linux (chemins XDG standard, résolus par `app.getPath('userData')`).
 
@@ -94,13 +116,15 @@ Le port MCP n'est volontairement pas vérifié par les jobs de smoke test : le s
 
 ### Outils
 
-Le catalogue compte **277 entrées** réparties en six catégories (`recon`, `enumer`, `fuzz`, `network`, `utility`, `ai`) :
+Le catalogue compte **286 entrées** réparties en six catégories (`recon` 71, `enumer` 9, `fuzz` 14, `network` 49, `utility` 141, `ai` 2) :
 
 | Source | Nb | Installation |
 | --- | --- | --- |
 | `winget` | 122 | `winget install` (Windows) ; sous Linux, détection d'abord, puis `apt` via `pkexec` quand un paquet Debian est connu |
-| `github` | 38 | asset de release téléchargé, extrait, rendu exécutable, copié dans le dossier outils |
-| `git` | ~117 | `git clone` sécurisé (frameworks, wordlists, outils Python/Go) — un bouton **Guide** ouvre la doc, rien n'est compilé ni exécuté automatiquement |
+| `github` | 43 | asset de release téléchargé, extrait, rendu exécutable, copié dans le dossier outils |
+| `git` | 112 | `git clone` sécurisé (frameworks, wordlists, outils Python/Go) — un bouton **Guide** ouvre la doc, rien n'est compilé ni exécuté automatiquement |
+| `go` | 5 | `go install <module>@latest` avec `GOBIN` dirigé vers le dossier de l'outil |
+| `pip` | 4 | `uv venv` + `uv pip install` dans un venv isolé par outil (uv est lui-même au catalogue) |
 
 Détails qui comptent :
 
@@ -119,7 +143,7 @@ Détails qui comptent :
 - Écran **Réglages → IA** : activer un serveur MCP HTTP (port défaut `8787`), exposable **sur le réseau local (LAN)** pour piloter BountyDesk depuis plusieurs PC, avec **un jeton nommé par PC/IA** (jetons chiffrés, révocation en 1 clic, jamais listés dans le README ni les logs).
 - **Aucun secret ne traverse le pont vers l'interface** : les jetons MCP et d'agent sont affichés masqués (`••••••••1234`), le bouton « Copier » fait écrire dans le presse-papier par le processus principal, et les extraits de configuration affichent `<JETON>`. Même règle pour les mots de passe enregistrés : la liste ne contient qu'un booléen « a un secret », le déchiffrement n'arrive que pour la ligne dont l'utilisateur demande la révélation.
 - Adresse du serveur (locale et LAN) copiable en 1 clic, et un tableau **Activité des IA** journalise chaque appel d'outil (poste, outil, statut, durée).
-- **Outils MCP** : `list_programs`, `get_program_detail`, `list_credentials` (sans secret), `list_tools`, `install_tool`, `start_scan` (mêmes garde-fous que l'UI), `get_scan`, `scan_events`, `run_tool` (exécution *encadrée* d'un binaire du catalogue, whitelist stricte par défaut).
+- **Outils MCP** (16) : `list_programs` (paginé : `limit` / `offset`, total annoncé dans `details`), `get_program_detail`, `list_credentials` (sans secret), `set_note` / `list_notes` (notes horodatées, lecture seule pour la seconde), `list_tools`, `install_tool`, `open_browser`, `fetch_page`, `list_scans`, `start_scan` (mêmes garde-fous que l'UI), `get_scan`, `scan_events`, `dedupe_findings`, `cvss_score`, `run_tool` (exécution *encadrée* d'un binaire du catalogue, whitelist stricte par défaut).
 - Exemple de config `claude_desktop_config.json` / `opencode.json` fourni dans l'app.
 - Pare-feu : l'app vérifie l'état de la règle d'ouverture du port et sait la créer — `netsh` sous Windows, `ufw` / `firewall-cmd` via `pkexec` sous Linux. Sur les autres plateformes, l'état est honnêtement rapporté « non géré ». La règle est **limitée au réseau privé** (profils `private` sous Windows, sources RFC1918 sous Linux) et **retirée à la désactivation du serveur**.
 - **Le mode LAN n'est accordé que sur un réseau privé** (10/8, 172.16/12, 192.168/16). La vérification est faite dans `startMcpServer` lui-même : aucun appelant ne peut obtenir `0.0.0.0` depuis un café ou un partage public, même en le demandant explicitement.
@@ -187,6 +211,7 @@ src/
   shared/ipc.ts    # contrat de types et canaux partagés
 remote-agent/      # agent Rust d'ecran distant (Windows uniquement, compile a part)
 agent/             # pack Claude Code + skills
+boite/             # CLI de coordination d'agents (boite agents ...)
 tests/             # Vitest (API, schema, throttler, paginate, db, scan, catalogue, plateforme, installer, MCP)
 openapi/           # spec OpenAPI Intigriti vendored
 ```

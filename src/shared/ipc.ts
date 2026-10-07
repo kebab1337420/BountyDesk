@@ -4,6 +4,7 @@ export const IPC = {
   AuthClear: 'auth:clear',
   ProgramsList: 'programs:list',
   ProgramsSync: 'programs:sync',
+  ProgramsExport: 'programs:export',
   FavoriteSet: 'favorite:set',
   NoteSet: 'note:set',
   GroupsList: 'groups:list',
@@ -100,6 +101,17 @@ export interface ProgramsPage {
   records: ProgramSummary[]
   total: number
 }
+
+export type ExportFormat = 'csv' | 'json'
+
+/**
+ * L'export se fait via un sélecteur de fichier du système : le renderer ne
+ * choisit jamais un chemin, il ne reçoit que le chemin retenu.
+ * `canceled` distingue l'annulation (pas une erreur à afficher) d'un échec.
+ */
+export type ProgramsExportResult =
+  | { ok: true; path: string; rows: number }
+  | { ok: false; error: string; canceled?: boolean }
 
 export type DbFail = { ok: false; error: string }
 
@@ -225,6 +237,10 @@ export interface ToolEntry {
   installed: boolean
   defaultChecked: boolean
   docs?: string
+  /** Windows uniquement : l'app refuse l'installation ailleurs (badge + message). */
+  windowsOnly?: boolean
+  /** Application graphique : rien d'installable en ligne de commande. */
+  guiOnly?: boolean
 }
 
 export type ToolsListResult = { ok: true; tools: ToolEntry[] } | DbFail
@@ -373,6 +389,7 @@ export interface BountyDeskBridge {
     list(query: ProgramsQuery): Promise<ProgramsPage>
     sync(): Promise<SyncResult>
     detail(programId: string): Promise<DetailResult>
+    export(query: ProgramsQuery, format: ExportFormat): Promise<ProgramsExportResult>
   }
   credentials: {
     list(programId: string): Promise<CredentialsListResult>

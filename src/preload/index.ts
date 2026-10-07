@@ -11,6 +11,7 @@ const bridge: BountyDeskBridge = {
     list: (query) => ipcRenderer.invoke(IPC.ProgramsList, query),
     sync: () => ipcRenderer.invoke(IPC.ProgramsSync),
     detail: (programId: string) => ipcRenderer.invoke(IPC.ProgramDetailGet, programId),
+    export: (query, format) => ipcRenderer.invoke(IPC.ProgramsExport, { ...query, format }),
   },
   credentials: {
     list: (programId: string) => ipcRenderer.invoke(IPC.CredentialsList, programId),

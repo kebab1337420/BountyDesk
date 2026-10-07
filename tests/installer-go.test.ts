@@ -22,7 +22,10 @@ vi.mock('electron', () => ({
 // sans réseau ni toolchain réelle.
 const fake = vi.hoisted(() => ({
   mode: 'ok' as 'ok' | 'missing' | 'fail' | 'no-binary',
-  spawns: [] as { cmd: string; args: string[]; gobin?: string }[]
+  spawns: [] as { cmd: string; args: string[]; gobin?: string }[],
+  // Bloque la détection `go version` jusqu'à relâchement explicite.
+  hang: false,
+  held: null as null | (() => void)
 }))
 
 vi.mock('node:child_process', () => ({
@@ -37,6 +40,10 @@ vi.mock('node:child_process', () => ({
     child.stderr = new EventEmitter()
     child.kill = vi.fn()
     queueMicrotask(() => {
+      if (fake.hang && args[0] === 'version') {
+        fake.held = () => child.emit('close', 0)
+        return
+      }
       if (fake.mode === 'missing') {
         child.emit('error', Object.assign(new Error('spawn go ENOENT'), { code: 'ENOENT' }))
         return
@@ -126,5 +133,23 @@ describe('source go (go install en GOBIN isolé)', () => {
     writeFileSync(join(binDir, exeName()), 'x')
     expect(await isInstalled(tool)).toBe(true)
     rmSync(binDir, { recursive: true, force: true })
+  })
+
+  it('refuse une deuxième installation du même outil pendant qu’une est en cours', async () => {
+    fake.hang = true
+    fake.spawns.length = 0
+    const first = installTool('fff')
+    await new Promise((r) => setTimeout(r, 0))
+    const second = await installTool('fff')
+    expect(second.ok).toBe(false)
+    expect(second).toEqual({ ok: false, error: expect.stringMatching(/déjà en cours/) })
+
+    // On relâche la détection : la première installation doit pouvoir finir.
+    fake.hang = false
+    fake.mode = 'ok'
+    fake.held?.()
+    const res = await first
+    expect(res).toEqual({ ok: true, installed: true })
+    rmSync(join(toolsDir(), 'fff'), { recursive: true, force: true })
   })
 })

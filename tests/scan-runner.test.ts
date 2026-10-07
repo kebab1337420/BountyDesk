@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterAll, vi } from 'vitest'
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -184,4 +184,31 @@ describe('ScanRunner - arret de la descendance', () => {
     expect(existsSync(counter) ? statSync(counter).size : 0).toBe(sizeAfterTimeout)
     expect(scanStatus(scanId)).toBe('error')
   }, 40_000)
+})
+
+describe('ScanRunner - etape wordlist', () => {
+  it('compte un outil execute via la wordlist comme un outil ayant tourne', async () => {
+    const wordlistDir = join(userData, 'tools', 'seclists', 'Discovery', 'Web-Content')
+    mkdirSync(wordlistDir, { recursive: true })
+    writeFileSync(join(wordlistDir, 'raft-medium-words.txt'), 'admin\nlogin\n')
+
+    try {
+      const scanId = newScan()
+      const runner = new ScanRunner(scanId, { stepTimeoutMs: 30_000 })
+      await runner.run(
+        plan([
+          { tool: 'node', args: ['MISSING_WORDLIST'] },
+          { tool: 'binaire-inexistant-bd', args: [] }
+        ])
+      )
+
+      // Sans le comptage de la branche wordlist, ranTools restait a 0 :
+      // l'etape absente faisait basculer tout le scan en « error » alors
+      // qu'un outil avait pourtant tourne.
+      expect(scanStatus(scanId)).toBe('done')
+      expect(events(scanId).some((m) => m.includes('absent(s)'))).toBe(true)
+    } finally {
+      rmSync(join(userData, 'tools', 'seclists'), { recursive: true, force: true })
+    }
+  }, 30_000)
 })

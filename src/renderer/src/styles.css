@@ -420,6 +420,25 @@ kbd.search-kbd {
   border-radius: var(--radius);
 }
 
+.banner-ok {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 10px 14px;
+  background: var(--green-soft);
+  border: 1px solid var(--green);
+  color: var(--green);
+  border-radius: var(--radius);
+}
+
+/* Un chemin d'export long ne doit pas faire déborder la bannière. */
+.banner-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 /* ---------- Login ---------- */
 
 .shell.login {
@@ -835,6 +854,16 @@ select {
   pointer-events: none;
 }
 
+.load-more {
+  display: flex;
+  justify-content: center;
+  padding: 4px 0 2px;
+}
+
+.load-more .btn {
+  min-width: 260px;
+}
+
 .program-row {
   display: flex;
   align-items: flex-start;
@@ -928,6 +957,13 @@ select {
   color: var(--green);
   border-color: rgba(61, 220, 151, 0.4);
   background: var(--green-soft);
+}
+
+/* Windows-only / GUI : installation refusée ailleurs, on le dit d'avance. */
+.badge.warn {
+  color: var(--amber);
+  border-color: rgba(255, 176, 32, 0.4);
+  background: var(--amber-soft);
 }
 
 .program-assoc {
@@ -1171,6 +1207,8 @@ select {
 .cred-label { font-weight: 600; }
 .cred-user, .cred-secret { font-family: var(--font-mono); font-size: 12px; color: var(--cyan); word-break: break-all; }
 .cred-actions { display: flex; gap: 4px; flex: none; }
+/* Une note déjà écrite se voit d'un coup d'œil dans la liste. */
+.icon-btn.has-note { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
 .cred-form { border-top: 1px solid var(--border); padding-top: 14px; }
 .cred-form h4 { margin: 0 0 8px; font-size: 13px; color: var(--muted); }
 .cred-form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px; }

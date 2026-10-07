@@ -335,7 +335,12 @@ export class Repository {
       case 'bounty':
         return `ORDER BY CASE WHEN p.max_bounty_value IS NULL THEN 1 ELSE 0 END, p.max_bounty_value ${dir}, p.name COLLATE NOCASE ASC`
       case 'recent':
-        return 'ORDER BY p.updated_at DESC'
+        // L'ordre doit être total : sans second critère, deux programmes mis à
+        // jour à la même milliseconde (une synchro en écrit des centaines en une
+        // même ms) changent de rang d'une page à l'autre, et la pagination
+        // saute ou répète des lignes. Le second critère suit aussi le sens pour
+        // qu'inverser le tri inverse réellement la liste.
+        return `ORDER BY p.updated_at ${dir}, p.id ${dir}`
       default:
         return `ORDER BY p.name COLLATE NOCASE ${dir}, p.id ASC`
     }
@@ -558,6 +563,39 @@ export class Repository {
     const status = patch.status ?? current.status
     const finishedAt = patch.finishedAt ?? current.finished_at
     this.db.prepare('UPDATE scans SET status = ?, finished_at = ? WHERE id = ?').run(status, finishedAt, id)
+  }
+
+  /**
+   * Un scan "running" ne peut pas survivre au processus qui l'a lancé : après
+   * un crash ou un redémarrage, la ligne resterait bloquée sur un statut
+   * définitif et l'interface pollerait pour toujours un scan qui n'existe plus.
+   */
+  failOrphanScans(now: number = Date.now()): number {
+    const rows = this.db.prepare("SELECT id FROM scans WHERE status = 'running'").all() as unknown as {
+      id: number
+    }[]
+    if (rows.length === 0) return 0
+    const upd = this.db.prepare("UPDATE scans SET status = 'error', finished_at = ? WHERE id = ?")
+    const evt = this.db.prepare(
+      'INSERT INTO scan_events (scan_id, seq, ts, level, message) VALUES (?, ?, ?, ?, ?)'
+    )
+    const message = "Scan interrompu par l’arrêt ou le redémarrage de BountyDesk."
+    this.db.exec('BEGIN')
+    try {
+      for (const row of rows) {
+        upd.run(now, row.id)
+        evt.run(row.id, this.countScanEvents(row.id) + 1, now, 'error', message)
+      }
+      this.db.exec('COMMIT')
+    } catch (err) {
+      try {
+        this.db.exec('ROLLBACK')
+      } catch {
+        /* transaction déjà refermée par SQLite */
+      }
+      throw err
+    }
+    return rows.length
   }
 
   listScans(programId: string): ScanRow[] {

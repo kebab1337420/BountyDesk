@@ -6,9 +6,15 @@ export function McpScreen() {
   const [error, setError] = React.useState<string | null>(null)
   const [busy, setBusy] = React.useState(false)
   const [mcp, setMcp] = React.useState<McpStatusInfo | null>(null)
+  // null = pas encore chargé : sans ce drapeau, l'état « indisponible »
+  // s'affiche pendant le premier aller-retour IPC.
+  const [mcpLoaded, setMcpLoaded] = React.useState(false)
 
   React.useEffect(() => {
-    void Api.mcp.status().then(setMcp).catch(() => setMcp(null))
+    void Api.mcp.status()
+      .then(setMcp)
+      .catch(() => setMcp(null))
+      .finally(() => setMcpLoaded(true))
   }, [])
 
   const openBrowser = async () => {
@@ -42,9 +48,11 @@ export function McpScreen() {
       </div>
       <div className="box">
         <p className="muted">
-          {mcp === null
-            ? 'État du serveur MCP indisponible.'
-            : !mcp.enabled
+          {!mcpLoaded
+            ? 'Chargement de l’état du serveur MCP…'
+            : mcp === null
+              ? 'État du serveur MCP indisponible.'
+              : !mcp.enabled
               ? 'Serveur MCP désactivé — activez-le depuis Réglages.'
               : mcp.running
                 ? `Serveur MCP actif${mcp.port ? ` sur le port ${mcp.port}` : ''} · ${mcp.tokens.length} jeton(s).`

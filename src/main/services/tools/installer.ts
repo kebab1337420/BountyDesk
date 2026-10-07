@@ -17,6 +17,7 @@ import {
   releaseTarget,
   selectReleaseAsset
 } from './platform'
+import { killTree } from '../proc'
 
 export function toolsDir(): string {
   const dir = join(app.getPath('userData'), 'tools')
@@ -179,7 +180,9 @@ function killOnTimeout(child: ReturnType<typeof spawn>, ms: number): () => boole
   let timedOut = false
   const timer = setTimeout(() => {
     timedOut = true
-    child.kill('SIGKILL')
+    // winget, uv et git lancent leurs propres enfants : ne tuer que le pid
+    // direct laisserait une installation continuer en arrière-plan.
+    killTree(child)
   }, ms)
   timer.unref?.()
   return () => {
@@ -199,6 +202,9 @@ function run(
     const child = spawn(cmd, args, {
       windowsHide: true,
       shell: false,
+      // POSIX : enfant meneur de son groupe, pour que killTree vise toute la
+      // descendance (git appelle ssh, uv peut relancer des scripts).
+      detached: process.platform !== 'win32',
       cwd: toolsDir(),
       env: env ? { ...process.env, ...env } : undefined
     })
@@ -216,7 +222,12 @@ function run(
 /** Variante qui capture stdout : sert a resoudre un chemin sans executer la cible. */
 function runCapture({ cmd, args }: Spawn, timeoutMs = DETECT_TIMEOUT_MS): Promise<{ code: number; stdout: string }> {
   return new Promise((resolve) => {
-    const child = spawn(cmd, args, { windowsHide: true, shell: false, cwd: toolsDir() })
+    const child = spawn(cmd, args, {
+      windowsHide: true,
+      shell: false,
+      detached: process.platform !== 'win32',
+      cwd: toolsDir()
+    })
     const timedOut = killOnTimeout(child, timeoutMs)
     let stdout = ''
     child.stdout?.on('data', (b: Buffer) => {
@@ -377,6 +388,8 @@ export async function currentTools(): Promise<ToolEntry[]> {
       installed,
       defaultChecked: def.defaultChecked,
       docs: def.githubRepo ? `https://github.com/${def.githubRepo}` : undefined,
+      windowsOnly: def.windowsOnly,
+      guiOnly: def.guiOnly,
     })
   }
   return tools
@@ -526,8 +539,22 @@ async function downloadText(url: string, maxBytes = 1024 * 1024): Promise<string
     }
   }
   if (!res.body) throw new Error('Réponse vide')
-  const buf = Buffer.from(await res.arrayBuffer())
-  if (buf.byteLength > maxBytes) throw new Error('Fichier de sommes de contrôle trop volumineux')
+  // Lecture par morceaux avec plafond : un serveur qui ignore content-length
+  // (ou qui ment sur sa taille) ne peut pas faire gonfler la mémoire à volonté.
+  const reader = res.body.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    total += value.byteLength
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => {})
+      throw new Error('Fichier de sommes de contrôle trop volumineux')
+    }
+    chunks.push(value)
+  }
+  const buf = Buffer.concat(chunks)
   return buf.toString('utf8')
 }
 
@@ -791,7 +818,23 @@ async function installPip(tool: ToolDefinition, onOutput: (line: string) => void
   onOutput(`Installé : ${basename(script)}`)
 }
 
+/** Une installation par outil : l'UI, le pont MCP et les tests peuvent frapper en même temps. */
+const installsInFlight = new Map<string, Promise<ToolInstallationResult>>()
+
 export async function installTool(id: string, onOutput?: (line: string) => void): Promise<ToolInstallationResult> {
+  // Deux installations simultanées du meme outil s'arrachent le meme dossier :
+  // on refuse la deuxieme plutot que de corrompre la premiere.
+  if (installsInFlight.has(id)) {
+    return { ok: false, error: `Une installation de « ${id} » est déjà en cours.` }
+  }
+  const task = runInstallTool(id, onOutput).finally(() => {
+    installsInFlight.delete(id)
+  })
+  installsInFlight.set(id, task)
+  return task
+}
+
+async function runInstallTool(id: string, onOutput?: (line: string) => void): Promise<ToolInstallationResult> {
   const tool = getTool(id)
   if (!tool) return { ok: false, error: `Outil inconnu : ${id}` }
   try {
@@ -808,7 +851,7 @@ export async function installTool(id: string, onOutput?: (line: string) => void)
       return { ok: true, installed: await isInstalled(tool) }
     }
     if (tool.source === 'winget' && tool.wingetId) {
-      if (tool.windowsOnly === true) {
+      if (tool.windowsOnly === true && !isWindows()) {
         return { ok: false, error: `${tool.name} est un outil Windows uniquement.` }
       }
       if (tool.guiOnly === true) {
@@ -851,7 +894,10 @@ export async function installTool(id: string, onOutput?: (line: string) => void)
       // catch : un binaire corrompu ou un echec de verification d'integrite ne
       // doit pas pouvoir etre contourne par une installation via apt.
       const wanted = assetFilterFor(tool, releaseTarget())
-      if (!isWindows() && tool.aptPackage && wanted === null) {
+      // assetFilterFor retourne undefined (jamais null) quand aucun filtre
+      // d'asset n'est configuré : sans ce comparateur, le repli apt ci-dessous
+      // était du code mort et installGithub échouait sur un asset absent.
+      if (!isWindows() && tool.aptPackage && wanted === undefined) {
         const aptError = await withSystemInstallLock(() => installViaApt(tool, onOutput ?? (() => {})))
         if (aptError !== null) return { ok: false, error: aptError }
       } else {

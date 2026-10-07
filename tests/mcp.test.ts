@@ -76,6 +76,24 @@ describe('MCP tools', () => {
     expect(JSON.parse(fav.text)).toHaveLength(1)
   })
 
+  it('list_programs se pagine et annonce le reste à lire', async () => {
+    const repo = getRepository()
+    repo.upsertPrograms(
+      [2, 3, 4].map((i) => ({ ...({ id: `prog-${i}`, handle: `h${i}`, name: `Prog ${i}`, type: null, status: null, confidentiality: null, minBounty: null, maxBounty: null, industry: null, webLink: null, following: false, rawJson: null } as ProgramInput) })),
+    )
+
+    const page1 = await callTool('list_programs', { limit: 2, offset: 0 })
+    expect(JSON.parse(page1.text)).toHaveLength(2)
+    expect(page1.details).toMatchObject({ count: 2, total: 4, offset: 0, hasMore: true })
+
+    const page2 = await callTool('list_programs', { limit: 2, offset: 2 })
+    expect(JSON.parse(page2.text)).toHaveLength(2)
+    expect(page2.details).toMatchObject({ count: 2, total: 4, offset: 2, hasMore: false })
+
+    const bad = await callTool('list_programs', { limit: 0 })
+    expect(bad.isError).toBe(true)
+  })
+
   it('get_program_detail renvoie scope et ROE depuis le cache', async () => {
     const res = await callTool('get_program_detail', { programId: 'prog-1' })
     expect(res.isError).toBeUndefined()

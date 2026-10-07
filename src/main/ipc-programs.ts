@@ -1,9 +1,11 @@
-import { ipcMain } from 'electron'
+import { dialog, ipcMain } from 'electron'
+import { writeFileSync } from 'node:fs'
 import { z } from 'zod'
 import { IPC } from '../shared/ipc'
 import { getRepository } from './db'
 import { getClient } from './app-state'
 import { syncPrograms } from './services/programs'
+import { exportFileName, exportQuery, serializeExport } from './services/export'
 
 const programIdSchema = z.string().min(1).max(200)
 const dbResultError = (err: unknown): { ok: false; error: string } => ({
@@ -22,6 +24,14 @@ const programsQuerySchema = z.object({
   offset: z.number().int().min(0).max(1_000_000).optional(),
 })
 
+/**
+ * L'export ignore la pagination (on exporte ce qui est filtré, pas ce qui est
+ * déroulé) : sa validation n'accepte donc ni limit ni offset.
+ */
+const programsExportSchema = programsQuerySchema
+  .omit({ limit: true, offset: true })
+  .extend({ format: z.enum(['csv', 'json']) })
+
 export function registerProgramsIpc(): void {
   ipcMain.handle(IPC.ProgramsList, (_event, rawQuery) => {
     const query = programsQuerySchema.parse(rawQuery ?? {})
@@ -35,6 +45,35 @@ export function registerProgramsIpc(): void {
     if (!client.getToken()) return { ok: false, error: 'Aucun token configuré' } as const
     const synced = await syncPrograms(client)
     return { ok: true, synced, at: Date.now() } as const
+  })
+
+  ipcMain.handle(IPC.ProgramsExport, async (_event, rawQuery) => {
+    const parsed = programsExportSchema.safeParse(rawQuery ?? {})
+    if (!parsed.success) {
+      return { ok: false, error: "Paramètres d'export invalides." } as const
+    }
+    const { format, ...filters } = parsed.data
+    const { records } = getRepository().listPrograms(exportQuery(filters))
+    if (records.length === 0) {
+      return { ok: false, error: 'Aucun programme à exporter avec ces filtres.' } as const
+    }
+    const { canceled, filePath } = await dialog.showSaveDialog({
+      title: 'Exporter les programmes',
+      defaultPath: exportFileName(format),
+      filters:
+        format === 'csv'
+          ? [{ name: 'CSV (UTF-8)', extensions: ['csv'] }]
+          : [{ name: 'JSON', extensions: ['json'] }],
+    })
+    if (canceled || !filePath) {
+      return { ok: false, error: 'Export annulé.', canceled: true } as const
+    }
+    try {
+      writeFileSync(filePath, serializeExport(records, format), 'utf8')
+    } catch (err) {
+      return dbResultError(err)
+    }
+    return { ok: true, path: filePath, rows: records.length } as const
   })
 
   ipcMain.handle(IPC.FavoriteSet, (_event, raw) => {

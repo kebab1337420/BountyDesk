@@ -161,6 +161,27 @@ describe('Repository', () => {
     expect(page.records.map((r) => r.name)).toEqual(['Prog 3', 'Prog 4'])
   })
 
+  it('trie « récent » de façon totale : la pagination ne saute ni ne répète', () => {
+    for (let i = 1; i <= 5; i += 1) {
+      repo.upsertProgram(sample({ id: `prog-${i}`, handle: `h${i}`, name: `Prog ${i}` }))
+    }
+    // Une synchro écrit des centaines de programmes dans la même milliseconde :
+    // tous les updated_at sont identiques ici, seul le second critère trie.
+    db.prepare('UPDATE programs SET updated_at = 1700000000000').run()
+
+    const seen: string[] = []
+    for (const offset of [0, 2, 4]) {
+      const page = repo.listPrograms({ sort: 'recent', dir: 'desc', limit: 2, offset })
+      seen.push(...page.records.map((r) => r.id))
+    }
+    expect(seen).toHaveLength(5)
+    expect(new Set(seen).size).toBe(5)
+    expect(seen).toEqual(['prog-5', 'prog-4', 'prog-3', 'prog-2', 'prog-1'])
+
+    const asc = repo.listPrograms({ sort: 'recent', dir: 'asc', limit: 5 }).records.map((r) => r.id)
+    expect(asc).toEqual([...seen].reverse())
+  })
+
   it('traite les jokers LIKE de la recherche comme des caractères littéraux', () => {
     repo.upsertProgram(sample({ id: 'p-1', handle: 'h1', name: 'Remise 100%' }))
     repo.upsertProgram(sample({ id: 'p-2', handle: 'h2', name: 'Remise 1000' }))
@@ -255,5 +276,23 @@ describe('Repository', () => {
     const scanId = repo.createScan({ programId: 'prog-1', depth: 'quick', rateLimit: 10, roeConfirm: true })
     repo.appendScanEvents(scanId, [])
     expect(repo.countScanEvents(scanId)).toBe(0)
+  })
+
+  it('referme en erreur les scans « running » orphelins d’un arrêt', () => {
+    repo.upsertProgram(sample())
+    const running = repo.createScan({ programId: 'prog-1', depth: 'quick', rateLimit: 10, roeConfirm: true })
+    const done = repo.createScan({ programId: 'prog-1', depth: 'low', rateLimit: 5, roeConfirm: true })
+    repo.updateScan(done, { status: 'done', finishedAt: 123 })
+
+    expect(repo.failOrphanScans(999)).toBe(1)
+
+    expect(repo.getScan(running)?.status).toBe('error')
+    expect(repo.getScan(running)?.finished_at).toBe(999)
+    expect(repo.getScan(done)?.status).toBe('done')
+    const msgs = repo.listScanEvents(running, 0).map((e) => e.message)
+    expect(msgs).toHaveLength(1)
+    expect(msgs[0]).toContain('interrompu')
+    // Un second passage (redémarrage suivant) ne trouve plus rien à refermer.
+    expect(repo.failOrphanScans()).toBe(0)
   })
 })

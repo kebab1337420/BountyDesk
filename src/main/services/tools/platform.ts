@@ -81,15 +81,16 @@ export function selectReleaseAsset(
   )
   if (matches.length === 0) throw new Error(`Aucun asset ${label} trouvé pour ${repo}`)
 
-  if (matches.length > 1) {
-    // On ne retient que les assets de la plateforme cible, plus ceux dont le nom
-    // ne mentionne aucune plateforme (findomain-linux.zip, etc.).
-    const platformed = matches.filter((a) => {
-      const p = assetPlatform(a.name)
-      return p === target || p === 'unknown'
-    })
-    if (platformed.length > 0) matches = platformed
-  }
+  // On ne retient que les assets de la plateforme cible, plus ceux dont le nom
+  // ne mentionne aucune plateforme (findomain-linux.zip, etc.). Si tous les
+  // candidats nomment explicitement une autre plateforme, installer un binaire
+  // Windows sous Linux (ou l'inverse) n'a aucun sens : on échoue franchement.
+  const platformed = matches.filter((a) => {
+    const p = assetPlatform(a.name)
+    return p === target || p === 'unknown'
+  })
+  if (platformed.length > 0) matches = platformed
+  else throw new Error(`Aucun asset ${label} trouvé pour ${repo}`)
   if (matches.length > 1) {
     const amd64 = matches.filter((a) => ARCH64.test(a.name))
     if (amd64.length === 1) matches = amd64

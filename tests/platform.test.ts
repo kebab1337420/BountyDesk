@@ -102,6 +102,13 @@ describe('selectReleaseAsset', () => {
       .toThrow(/Aucun asset linux/)
   })
 
+  it('refuse l’asset d’une autre plateforme même candidat unique', () => {
+    expect(() => selectReleaseAsset('x/y', 'amd64', assets(['tool_1.0_windows_amd64.zip']), 'linux'))
+      .toThrow(/Aucun asset linux/)
+    expect(() => selectReleaseAsset('x/y', 'amd64', assets(['tool_1.0_linux_amd64.zip']), 'windows'))
+      .toThrow(/Aucun asset windows/)
+  })
+
   it('lève une erreur quand plusieurs candidats subsistent', () => {
     // deux assets qui contiennent tous deux le fragment, même plateforme, même arch :
     // ni la préférence 64 bits ni l'exclusion 32 bits ne peuvent départager
