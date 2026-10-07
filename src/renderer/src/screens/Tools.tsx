@@ -316,7 +316,9 @@ export function ToolsScreen() {
                           ? 'winget'
                           : tool.source === 'git'
                             ? 'framework'
-                            : 'portable'}
+                            : tool.source === 'go'
+                              ? 'go install'
+                              : 'portable'}
                       </span>
                       {tool.docs && (
                         <button
