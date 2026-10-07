@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react'
-import type { GroupInfo, ProgramSummary, TagInfo } from '../../../shared/ipc'
+import type { ExportFormat, GroupInfo, ProgramSummary, ProgramsQuery, TagInfo } from '../../../shared/ipc'
 import { Api } from '../api'
 import { Modal } from '../components/Modal'
 import { ProgramDetailModal } from '../components/ProgramDetailModal'
@@ -175,6 +175,9 @@ export function ProgramsScreen() {
   const [search, setSearch] = useState('')
   const [fetching, setFetching] = useState(true)
   const [syncing, setSyncing] = useState(false)
+  const [exporting, setExporting] = useState(false)
+  const [exportFormat, setExportFormat] = useState<ExportFormat>('csv')
+  const [notice, setNotice] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [noteTarget, setNoteTarget] = useState<ProgramSummary | null>(null)
   const [detailTarget, setDetailTarget] = useState<ProgramSummary | null>(null)
@@ -190,6 +193,9 @@ export function ProgramsScreen() {
   const listSeq = useRef(0)
   const favoriteOnlyRef = useRef(favoriteOnly)
   favoriteOnlyRef.current = favoriteOnly
+  // Un total à zéro ne veut pas dire « base vide » quand un filtre est actif.
+  const hasActiveFilters = (): boolean =>
+    favoriteOnly || activeGroup !== null || activeTag !== null || search.trim() !== ''
 
   const loadList = useCallback(
     async (opts: { append?: boolean; offset?: number } = {}): Promise<void> => {
@@ -272,6 +278,7 @@ export function ProgramsScreen() {
   const runMutation = useCallback(
     async (fn: () => Promise<unknown>, withFacets = true): Promise<void> => {
       setError(null)
+      setNotice(null)
       try {
         await fn()
         await reload(withFacets)
@@ -285,6 +292,7 @@ export function ProgramsScreen() {
   const handleSync = async (): Promise<void> => {
     setSyncing(true)
     setError(null)
+    setNotice(null)
     try {
       const result = await Api.programs.sync()
       if (!result.ok) setError(result.error)
@@ -293,6 +301,34 @@ export function ProgramsScreen() {
       setError('La synchronisation a échoué (réseau ?).')
     } finally {
       setSyncing(false)
+    }
+  }
+
+  /**
+   * Export des programmes **avec les filtres courants** (favori, groupe, tag,
+   * recherche), pagination ignorée : c'est la sélection de travail qui part
+   * dans le fichier, pas la page affichée.
+   */
+  const handleExport = async (): Promise<void> => {
+    setExporting(true)
+    setError(null)
+    setNotice(null)
+    try {
+      const query: ProgramsQuery = {
+        sort,
+        dir,
+        favoriteOnly: favoriteOnly || undefined,
+        groupId: activeGroup ?? undefined,
+        tagId: activeTag ?? undefined,
+        search: search.trim() || undefined
+      }
+      const r = await Api.programs.export(query, exportFormat)
+      if (r.ok) setNotice(`${r.rows} programme${r.rows > 1 ? 's' : ''} exporté${r.rows > 1 ? 's' : ''} — ${r.path}`)
+      else if (!r.canceled) setError(r.error)
+    } catch {
+      setError("L'export a échoué.")
+    } finally {
+      setExporting(false)
     }
   }
 
@@ -448,6 +484,15 @@ export function ProgramsScreen() {
         </div>
       )}
 
+      {notice && (
+        <div className="banner-ok" role="status">
+          <span className="banner-text">{notice}</span>
+          <button className="modal-close" onClick={() => setNotice(null)} aria-label="Fermer">
+            ✕
+          </button>
+        </div>
+      )}
+
       <div className="programs-layout">
         <aside className="filter-pane">
           <div>
@@ -590,7 +635,13 @@ export function ProgramsScreen() {
               <select
                 aria-label="Trier"
                 value={sort}
-                onChange={(e) => setSort(e.target.value as 'name' | 'bounty' | 'recent')}
+                onChange={(e) => {
+                  const next = e.target.value as 'name' | 'bounty' | 'recent'
+                  setSort(next)
+                  // « Récemment mis à jour » se lit du plus récent au plus
+                  // ancien : on aligne le sens sur ce que dit le libellé.
+                  if (next === 'recent') setDir('desc')
+                }}
               >
                 <option value="name">Nom</option>
                 <option value="bounty">Prime max</option>
@@ -609,6 +660,22 @@ export function ProgramsScreen() {
               <span className={`muted count-pill ${fetching ? 'is-refreshing' : ''}`} aria-live="polite">
                 {fetching && programs.length > 0 ? '…' : `${programs.length} / ${total}`}
               </span>
+              <select
+                aria-label="Format d'export"
+                value={exportFormat}
+                onChange={(e) => setExportFormat(e.target.value as ExportFormat)}
+              >
+                <option value="csv">CSV</option>
+                <option value="json">JSON</option>
+              </select>
+              <button
+                className="btn"
+                onClick={() => void handleExport()}
+                disabled={exporting || total === 0}
+                title="Exporte les programmes filtrés (fichier choisi au système)"
+              >
+                {exporting ? 'Export…' : 'Exporter'}
+              </button>
               <button className="btn primary" onClick={() => void handleSync()} disabled={syncing}>
                 {syncing ? (
                   <>
@@ -633,11 +700,11 @@ export function ProgramsScreen() {
                 ★
               </span>
               <p>
-                {total === 0
+                {total === 0 && !hasActiveFilters()
                   ? 'Aucun programme. Cliquez sur « Synchroniser » pour importer le catalogue Intigriti.'
                   : 'Aucun résultat avec les filtres actuels.'}
               </p>
-              {total > 0 && (
+              {hasActiveFilters() && (
                 <button
                   className="btn small"
                   onClick={() => {

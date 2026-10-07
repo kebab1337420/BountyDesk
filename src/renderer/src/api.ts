@@ -17,6 +17,7 @@ import type {
   CreateTagResult,
   DbResult,
   DetailResult,
+  ExportFormat,
   GroupInfo,
   McpDiagnoseResult,
   McpFirewallFixResult,
@@ -28,6 +29,7 @@ import type {
   McpTokenAddResult,
   McpTokenRevokeResult,
   OpenExternalResult,
+  ProgramsExportResult,
   ProgramsPage,
   ProgramsQuery,
   ScanDepth,
@@ -54,7 +56,9 @@ export const Api = {
   programs: {
     list: (query: ProgramsQuery): Promise<ProgramsPage> => window.bountydesk.programs.list(query),
     sync: (): Promise<SyncResult> => window.bountydesk.programs.sync(),
-    detail: (programId: string): Promise<DetailResult> => window.bountydesk.programs.detail(programId)
+    detail: (programId: string): Promise<DetailResult> => window.bountydesk.programs.detail(programId),
+    export: (query: ProgramsQuery, format: ExportFormat): Promise<ProgramsExportResult> =>
+      window.bountydesk.programs.export(query, format)
   },
   credentials: {
     list: (programId: string): Promise<CredentialsListResult> => window.bountydesk.credentials.list(programId),

@@ -420,6 +420,19 @@ kbd.search-kbd {
   border-radius: var(--radius);
 }
 
+.banner-ok {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 10px 14px;
+  background: var(--green-soft);
+  border: 1px solid var(--green);
+  color: var(--green);
+  border-radius: var(--radius);
+}
+
 /* ---------- Login ---------- */
 
 .shell.login {
