@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useRef, useState } from 'react'
 import type { GroupInfo, ProgramSummary, TagInfo } from '../../../shared/ipc'
 import { Api } from '../api'
 import { Modal } from '../components/Modal'
@@ -14,6 +14,154 @@ function formatBounty(p: ProgramSummary): string {
   return `${b.value.toLocaleString('fr-FR')} ${b.currency}`
 }
 
+interface RowProps {
+  program: ProgramSummary
+  groups: GroupInfo[]
+  tags: TagInfo[]
+  onToggleFavorite: (p: ProgramSummary) => void
+  onOpenDetail: (p: ProgramSummary) => void
+  onOpenNote: (p: ProgramSummary) => void
+  onAddToGroup: (p: ProgramSummary, groupId: number) => void
+  onAddTag: (p: ProgramSummary, tagId: number) => void
+  onRemoveTag: (p: ProgramSummary, tagName: string) => void
+}
+
+/**
+ * La ligne est mémoïsée : ouvrir un modal, taper dans une note ou changer de
+ * filtre ne repeint pas les ~200 lignes de la page, seules les lignes dont le
+ * programme a réellement changé sont recalculées.
+ */
+const ProgramRow = memo(function ProgramRow({
+  program: p,
+  groups,
+  tags,
+  onToggleFavorite,
+  onOpenDetail,
+  onOpenNote,
+  onAddToGroup,
+  onAddTag,
+  onRemoveTag
+}: RowProps) {
+  const openFromKeyboard = (e: React.KeyboardEvent<HTMLDivElement>): void => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      onOpenDetail(p)
+    }
+  }
+
+  return (
+    <li className="program-row">
+      <button
+        className={`star ${p.favorite ? 'on' : ''}`}
+        aria-label={p.favorite ? 'Retirer des favoris' : 'Ajouter aux favoris'}
+        aria-pressed={p.favorite}
+        onClick={() => onToggleFavorite(p)}
+      >
+        ★
+      </button>
+      <div
+        className="program-main"
+        role="button"
+        tabIndex={0}
+        aria-label={`Détails de ${p.name}`}
+        onClick={() => onOpenDetail(p)}
+        onKeyDown={openFromKeyboard}
+      >
+        <div className="program-title">
+          <span className="program-name">{p.name}</span>
+          <span className="handle">{p.handle}</span>
+        </div>
+        <div className="program-meta">
+          <span className={`badge ${STATUS_BUG.test(p.status ?? '') ? 'status-bug' : ''}`}>{p.status ?? '—'}</span>
+          <span className="badge">{p.type ?? '—'}</span>
+          {p.industry && <span className="muted">{p.industry}</span>}
+        </div>
+        {(p.tags.length > 0 || p.groups.length > 0) && (
+          <div className="program-assoc">
+            {p.tags.map((t) => (
+              <button
+                key={t}
+                className="tag"
+                onClick={() => onRemoveTag(p, t)}
+                title="Retirer le tag"
+              >
+                #{t} ✕
+              </button>
+            ))}
+            {p.groups.map((g) => (
+              <span key={g} className="group-tag">
+                {g}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+      <div className="program-actions">
+        <button className="btn small" title="Détails de la mission" onClick={() => onOpenDetail(p)}>
+          Détails
+        </button>
+        <span className={`bounty ${p.maxBounty ? '' : 'none'}`} title="Prime max">
+          {formatBounty(p)}
+        </span>
+        <select
+          aria-label={`Ajouter ${p.name} à un groupe`}
+          value=""
+          onChange={(e) => {
+            const gid = Number(e.target.value)
+            if (gid) onAddToGroup(p, gid)
+          }}
+        >
+          <option value="">+ groupe</option>
+          {groups
+            .filter((g) => !p.groups.includes(g.name))
+            .map((g) => (
+              <option key={g.id} value={g.id}>
+                {g.name}
+              </option>
+            ))}
+        </select>
+        <select
+          aria-label={`Ajouter un tag à ${p.name}`}
+          value=""
+          onChange={(e) => {
+            const tid = Number(e.target.value)
+            if (tid) onAddTag(p, tid)
+          }}
+        >
+          <option value="">+ tag</option>
+          {tags
+            .filter((t) => !p.tags.includes(t.name))
+            .map((t) => (
+              <option key={t.id} value={t.id}>
+                #{t.name}
+              </option>
+            ))}
+        </select>
+        <button className="icon-btn" aria-label={`Note pour ${p.name}`} title="Note" onClick={() => onOpenNote(p)}>
+          📝
+        </button>
+      </div>
+    </li>
+  )
+})
+
+function SkeletonRows({ count = 6 }: { count?: number }) {
+  return (
+    <>
+      {Array.from({ length: count }, (_, i) => (
+        <li className="skeleton-row" key={i} aria-hidden="true">
+          <span className="sk-dot" />
+          <div className="sk-lines">
+            <span className="sk-line" style={{ width: '38%' }} />
+            <span className="sk-line" style={{ width: '55%' }} />
+            <span className="sk-line" style={{ width: '24%' }} />
+          </div>
+        </li>
+      ))}
+    </>
+  )
+}
+
 export function ProgramsScreen() {
   const [programs, setPrograms] = useState<ProgramSummary[]>([])
   const [total, setTotal] = useState(0)
@@ -25,7 +173,7 @@ export function ProgramsScreen() {
   const [activeGroup, setActiveGroup] = useState<number | null>(null)
   const [activeTag, setActiveTag] = useState<number | null>(null)
   const [search, setSearch] = useState('')
-  const [loading, setLoading] = useState(false)
+  const [fetching, setFetching] = useState(true)
   const [syncing, setSyncing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [noteTarget, setNoteTarget] = useState<ProgramSummary | null>(null)
@@ -35,57 +183,104 @@ export function ProgramsScreen() {
   const [newTagName, setNewTagName] = useState('')
   const [editingGroupId, setEditingGroupId] = useState<number | null>(null)
   const [editingGroupName, setEditingGroupName] = useState('')
-  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const refresh = useCallback(async () => {
-    let p: Awaited<ReturnType<typeof Api.programs.list>>
-    try {
-      p = await Api.programs.list({
-        sort,
-        dir,
-        favoriteOnly: favoriteOnly || undefined,
-        groupId: activeGroup ?? undefined,
-        tagId: activeTag ?? undefined,
-        search: search.trim() || undefined,
-        limit: PAGE_SIZE,
-        offset: 0,
-      })
-    } catch {
-      setError('Impossible de charger les programmes.')
-      return
-    }
-    setPrograms(p.records)
-    setTotal(p.total)
+  const searchRef = useRef<HTMLInputElement>(null)
+  // Numéro de séquence de la dernière requête de liste : une réponse lente qui
+  // arrive après une réponse plus récente est jetée au lieu d'écraser l'écran.
+  const listSeq = useRef(0)
+  const favoriteOnlyRef = useRef(favoriteOnly)
+  favoriteOnlyRef.current = favoriteOnly
+
+  const loadList = useCallback(
+    async (opts: { append?: boolean; offset?: number } = {}): Promise<void> => {
+      const seq = ++listSeq.current
+      setFetching(true)
+      try {
+        const page = await Api.programs.list({
+          sort,
+          dir,
+          favoriteOnly: favoriteOnly || undefined,
+          groupId: activeGroup ?? undefined,
+          tagId: activeTag ?? undefined,
+          search: search.trim() || undefined,
+          limit: PAGE_SIZE,
+          offset: opts.offset ?? 0
+        })
+        if (seq !== listSeq.current) return
+        setPrograms((prev) => (opts.append ? [...prev, ...page.records] : page.records))
+        setTotal(page.total)
+      } catch {
+        if (seq === listSeq.current) setError('Impossible de charger les programmes.')
+      } finally {
+        if (seq === listSeq.current) setFetching(false)
+      }
+    },
+    [sort, dir, favoriteOnly, activeGroup, activeTag, search]
+  )
+
+  const loadFacets = useCallback(async (): Promise<void> => {
     const [g, t] = await Promise.all([Api.groups.list(), Api.tags.list()])
     setGroups(g)
     setTags(t)
-  }, [sort, dir, favoriteOnly, activeGroup, activeTag, search])
-
-  useEffect(() => {
-    if (searchTimer.current) clearTimeout(searchTimer.current)
-    searchTimer.current = setTimeout(() => {
-      void refresh()
-    }, 250)
-    return () => {
-      if (searchTimer.current) clearTimeout(searchTimer.current)
-    }
-  }, [refresh])
-
-  useEffect(() => {
-    setLoading(true)
-    void refresh().finally(() => setLoading(false))
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const runMutation = async (fn: () => Promise<unknown>): Promise<void> => {
-    setError(null)
-    try {
-      await fn()
-      await refresh()
-    } catch {
-      setError('Une opération a échoué.')
+  // Les callbacks de mutation vivent dans des refs : leurs identités restent
+  // stables, donc les lignes mémoïsées ne se re-rendent pas à chaque frappe.
+  const loadListRef = useRef(loadList)
+  loadListRef.current = loadList
+  const loadFacetsRef = useRef(loadFacets)
+  loadFacetsRef.current = loadFacets
+
+  const reload = useCallback(async (withFacets: boolean): Promise<void> => {
+    await loadListRef.current()
+    if (withFacets) await loadFacetsRef.current()
+  }, [])
+
+  // Un seul effet de chargement : immédiat au montage, filtré à 250 ms ensuite
+  // (la version précédente doublonnait la première requête).
+  const firstRun = useRef(true)
+  useEffect(() => {
+    const delay = firstRun.current ? 0 : 250
+    const timer = setTimeout(() => {
+      firstRun.current = false
+      void loadList()
+    }, delay)
+    return () => clearTimeout(timer)
+  }, [loadList])
+
+  useEffect(() => {
+    void loadFacets()
+  }, [loadFacets])
+
+  // Raccourci clavier : « / » place le curseur dans la recherche, partout où
+  // l'utilisateur n'est pas déjà en train de saisir.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      const target = e.target as HTMLElement | null
+      const typing =
+        !!target &&
+        (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable)
+      if (e.key === '/' && !typing) {
+        e.preventDefault()
+        searchRef.current?.focus()
+      }
     }
-  }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
+  const runMutation = useCallback(
+    async (fn: () => Promise<unknown>, withFacets = true): Promise<void> => {
+      setError(null)
+      try {
+        await fn()
+        await reload(withFacets)
+      } catch {
+        setError('Une opération a échoué.')
+      }
+    },
+    [reload]
+  )
 
   const handleSync = async (): Promise<void> => {
     setSyncing(true)
@@ -93,7 +288,7 @@ export function ProgramsScreen() {
     try {
       const result = await Api.programs.sync()
       if (!result.ok) setError(result.error)
-      await refresh()
+      await reload(true)
     } catch {
       setError('La synchronisation a échoué (réseau ?).')
     } finally {
@@ -101,16 +296,52 @@ export function ProgramsScreen() {
     }
   }
 
-  const openNote = (p: ProgramSummary): void => {
+  /** Favori basculé localement d'abord : aucun rechargement de liste. */
+  const toggleFavorite = useCallback((p: ProgramSummary): void => {
+    const next = !p.favorite
+    const dropFromList = favoriteOnlyRef.current && !next
+    setPrograms((prev) => {
+      const updated = prev.map((x) => (x.id === p.id ? { ...x, favorite: next } : x))
+      return dropFromList ? updated.filter((x) => x.id !== p.id) : updated
+    })
+    if (dropFromList) setTotal((t) => Math.max(0, t - 1))
+    void Api.favorites
+      .set(p.id, next)
+      .then((r) => {
+        if (!r.ok) throw new Error(r.error)
+      })
+      .catch(() => {
+        setError("Le favori n'a pas pu être enregistré.")
+        void loadListRef.current()
+      })
+  }, [])
+
+  const openNote = useCallback((p: ProgramSummary): void => {
     setNoteDraft(p.note)
     setNoteTarget(p)
-  }
+  }, [])
+
+  const openDetail = useCallback((p: ProgramSummary): void => setDetailTarget(p), [])
 
   const saveNote = (): void => {
     if (!noteTarget) return
     const target = noteTarget
+    const draft = noteDraft
     setNoteTarget(null)
-    void runMutation(() => Api.notes.set(target.id, noteDraft))
+    setPrograms((prev) => prev.map((x) => (x.id === target.id ? { ...x, note: draft } : x)))
+    setError(null)
+    void Api.notes
+      .set(target.id, draft)
+      .then((r) => {
+        if (!r.ok) {
+          setError(r.error)
+          void loadListRef.current()
+        }
+      })
+      .catch(() => {
+        setError("La note n'a pas pu être enregistrée.")
+        void loadListRef.current()
+      })
   }
 
   const createGroup = (): void => {
@@ -157,20 +388,61 @@ export function ProgramsScreen() {
     })
   }
 
-  const addToGroup = (p: ProgramSummary, groupId: number): void => {
-    void runMutation(() => Api.groups.addMember(groupId, p.id))
+  const addToGroup = useCallback(
+    (p: ProgramSummary, groupId: number): void => {
+      void runMutation(() => Api.groups.addMember(groupId, p.id))
+    },
+    [runMutation]
+  )
+
+  const addTagToProgram = useCallback(
+    (p: ProgramSummary, tagId: number): void => {
+      void runMutation(() => Api.tags.addToProgram(p.id, tagId))
+    },
+    [runMutation]
+  )
+
+  const removeTagFromProgram = useCallback(
+    (p: ProgramSummary, tagName: string): void => {
+      const tag = tags.find((tg) => tg.name === tagName)
+      if (tag) void runMutation(() => Api.tags.removeFromProgram(p.id, tag.id))
+    },
+    [runMutation, tags]
+  )
+
+  const loadMore = async (): Promise<void> => {
+    const seq = listSeq.current
+    setFetching(true)
+    try {
+      const page = await Api.programs.list({
+        sort,
+        dir,
+        favoriteOnly: favoriteOnly || undefined,
+        groupId: activeGroup ?? undefined,
+        tagId: activeTag ?? undefined,
+        search: search.trim() || undefined,
+        limit: PAGE_SIZE,
+        offset: programs.length
+      })
+      if (seq !== listSeq.current) return
+      setPrograms((prev) => [...prev, ...page.records])
+      setTotal(page.total)
+    } catch {
+      if (seq === listSeq.current) setError('Impossible de charger la suite.')
+    } finally {
+      if (seq === listSeq.current) setFetching(false)
+    }
   }
 
-  const addTagToProgram = (p: ProgramSummary, tagId: number): void => {
-    void runMutation(() => Api.tags.addToProgram(p.id, tagId))
-  }
+  const initialLoading = fetching && programs.length === 0
+  const remaining = total - programs.length
 
   return (
     <div className="section">
       {error && (
-        <div className="banner-error">
+        <div className="banner-error" role="alert">
           {error}
-          <button className="modal-close" onClick={() => setError(null)}>
+          <button className="modal-close" onClick={() => setError(null)} aria-label="Fermer">
             ✕
           </button>
         </div>
@@ -212,7 +484,8 @@ export function ProgramsScreen() {
                       </button>
                       <button
                         className="icon-btn"
-                        aria-label="Renommer"
+                        aria-label={`Renommer ${g.name}`}
+                        title="Renommer"
                         onClick={() => {
                           setEditingGroupId(g.id)
                           setEditingGroupName(g.name)
@@ -220,7 +493,12 @@ export function ProgramsScreen() {
                       >
                         ✎
                       </button>
-                      <button className="icon-btn danger" aria-label="Supprimer" onClick={() => removeGroup(g.id)}>
+                      <button
+                        className="icon-btn danger"
+                        aria-label={`Supprimer ${g.name}`}
+                        title="Supprimer"
+                        onClick={() => removeGroup(g.id)}
+                      >
                         ✕
                       </button>
                     </div>
@@ -231,6 +509,7 @@ export function ProgramsScreen() {
             <div className="side-create">
               <input
                 placeholder="Nouveau groupe…"
+                aria-label="Nouveau groupe"
                 value={newGroupName}
                 onChange={(e) => setNewGroupName(e.target.value)}
                 onKeyDown={(e) => {
@@ -254,7 +533,12 @@ export function ProgramsScreen() {
                       <span className="side-label">#{t.name}</span>
                       <span className="count">{t.count}</span>
                     </button>
-                    <button className="icon-btn danger" aria-label="Supprimer" onClick={() => removeTag(t.id)}>
+                    <button
+                      className="icon-btn danger"
+                      aria-label={`Supprimer le tag ${t.name}`}
+                      title="Supprimer"
+                      onClick={() => removeTag(t.id)}
+                    >
                       ✕
                     </button>
                   </div>
@@ -264,6 +548,7 @@ export function ProgramsScreen() {
             <div className="side-create">
               <input
                 placeholder="Nouveau tag… (#)"
+                aria-label="Nouveau tag"
                 value={newTagName}
                 onChange={(e) => setNewTagName(e.target.value)}
                 onKeyDown={(e) => {
@@ -276,14 +561,30 @@ export function ProgramsScreen() {
 
         <div className="programs-content">
           <div className="toolbar">
-            <input
-              className="search"
-              placeholder="Rechercher par nom, handle ou industrie…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
+            <div className="search-wrap">
+              <input
+                ref={searchRef}
+                className="search"
+                type="search"
+                placeholder="Rechercher par nom, handle ou industrie…"
+                aria-label="Rechercher un programme"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape' && search) {
+                    setSearch('')
+                    e.currentTarget.blur()
+                  }
+                }}
+              />
+              {!search && <kbd className="search-kbd">/</kbd>}
+            </div>
             <div className="filter-chip-group">
-              <button className={`chip ${favoriteOnly ? 'active' : ''}`} onClick={() => setFavoriteOnly(!favoriteOnly)}>
+              <button
+                className={`chip ${favoriteOnly ? 'active' : ''}`}
+                aria-pressed={favoriteOnly}
+                onClick={() => setFavoriteOnly(!favoriteOnly)}
+              >
                 ★ Favoris
               </button>
               <select
@@ -295,130 +596,93 @@ export function ProgramsScreen() {
                 <option value="bounty">Prime max</option>
                 <option value="recent">Récemment mis à jour</option>
               </select>
-              <select aria-label="Sens" value={dir} onChange={(e) => setDir(e.target.value as 'asc' | 'desc')}>
-                <option value="asc">Croissant</option>
-                <option value="desc">Décroissant</option>
-              </select>
+              <button
+                className="btn dir-toggle"
+                aria-label={dir === 'asc' ? 'Ordre croissant — basculer' : 'Ordre décroissant — basculer'}
+                title={dir === 'asc' ? 'Croissant' : 'Décroissant'}
+                onClick={() => setDir(dir === 'asc' ? 'desc' : 'asc')}
+              >
+                {dir === 'asc' ? '↑' : '↓'}
+              </button>
             </div>
             <div className="toolbar-actions">
-              {total > 0 && (
-                <span className="muted">
-                  {total} programme{total > 1 ? 's' : ''}
-                </span>
-              )}
+              <span className={`muted count-pill ${fetching ? 'is-refreshing' : ''}`} aria-live="polite">
+                {fetching && programs.length > 0 ? '…' : `${programs.length} / ${total}`}
+              </span>
               <button className="btn primary" onClick={() => void handleSync()} disabled={syncing}>
-                {syncing ? 'Synchronisation…' : 'Synchroniser'}
+                {syncing ? (
+                  <>
+                    <span className="spinner" aria-hidden="true" /> Synchronisation…
+                  </>
+                ) : (
+                  'Synchroniser'
+                )}
               </button>
             </div>
           </div>
 
-          {loading && <p className="muted">Chargement…</p>}
-
-          {!loading && programs.length === 0 && (
-            <p className="muted">
-              {total === 0
-                ? 'Aucun programme. Cliquez sur « Synchroniser » pour importer le catalogue Intigriti.'
-                : 'Aucun résultat avec les filtres actuels.'}
-            </p>
+          {initialLoading && (
+            <ul className="program-list" aria-busy="true">
+              <SkeletonRows />
+            </ul>
           )}
 
-          <ul className="program-list">
-            {programs.map((p) => (
-              <li key={p.id} className="program-row">
+          {!initialLoading && programs.length === 0 && (
+            <div className="empty-state">
+              <span className="empty-icon" aria-hidden="true">
+                ★
+              </span>
+              <p>
+                {total === 0
+                  ? 'Aucun programme. Cliquez sur « Synchroniser » pour importer le catalogue Intigriti.'
+                  : 'Aucun résultat avec les filtres actuels.'}
+              </p>
+              {total > 0 && (
                 <button
-                  className={`star ${p.favorite ? 'on' : ''}`}
-                  aria-label={p.favorite ? 'Retirer des favoris' : 'Ajouter aux favoris'}
-                  onClick={() => void runMutation(() => Api.favorites.set(p.id, !p.favorite))}
+                  className="btn small"
+                  onClick={() => {
+                    setSearch('')
+                    setFavoriteOnly(false)
+                    setActiveGroup(null)
+                    setActiveTag(null)
+                  }}
                 >
-                  ★
+                  Réinitialiser les filtres
                 </button>
-                <div className="program-main" onClick={() => setDetailTarget(p)}>
-                  <div className="program-title">
-                    <span className="program-name">{p.name}</span>
-                    <span className="handle">{p.handle}</span>
-                  </div>
-                  <div className="program-meta">
-                    <span className={`badge ${STATUS_BUG.test(p.status ?? '') ? 'status-bug' : ''}`}>
-                      {p.status ?? '—'}
-                    </span>
-                    <span className="badge">{p.type ?? '—'}</span>
-                    {p.industry && <span className="muted">{p.industry}</span>}
-                  </div>
-                  <div className="program-assoc">
-                    {p.tags.map((t) => (
-                      <button
-                        key={t}
-                        className="tag"
-                        onClick={() => {
-                          const tag = tags.find((tg) => tg.name === t)
-                          if (tag) void runMutation(() => Api.tags.removeFromProgram(p.id, tag.id))
-                        }}
-                        title="Retirer le tag"
-                      >
-                        #{t} ✕
-                      </button>
-                    ))}
-                    {p.groups.map((g) => (
-                      <span key={g} className="group-tag">
-                        {g}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-                <div className="program-actions">
-                  <button className="btn small" title="Détails de la mission" onClick={() => setDetailTarget(p)}>
-                    Détails
-                  </button>
-                  <span className={`bounty ${p.maxBounty ? '' : 'none'}`} title="Prime max">
-                    {formatBounty(p)}
-                  </span>
-                  <select
-                    aria-label="Ajouter à un groupe"
-                    value=""
-                    onChange={(e) => {
-                      const gid = Number(e.target.value)
-                      if (gid) addToGroup(p, gid)
-                    }}
-                  >
-                    <option value="">+ groupe</option>
-                    {groups
-                      .filter((g) => !p.groups.includes(g.name))
-                      .map((g) => (
-                        <option key={g.id} value={g.id}>
-                          {g.name}
-                        </option>
-                      ))}
-                  </select>
-                  <select
-                    aria-label="Ajouter un tag"
-                    value=""
-                    onChange={(e) => {
-                      const tid = Number(e.target.value)
-                      if (tid) addTagToProgram(p, tid)
-                    }}
-                  >
-                    <option value="">+ tag</option>
-                    {tags
-                      .filter((t) => !p.tags.includes(t.name))
-                      .map((t) => (
-                        <option key={t.id} value={t.id}>
-                          #{t.name}
-                        </option>
-                      ))}
-                  </select>
-                  <button className="icon-btn" aria-label="Note" onClick={() => openNote(p)}>
-                    📝
-                  </button>
-                </div>
-              </li>
-            ))}
-          </ul>
+              )}
+            </div>
+          )}
+
+          {programs.length > 0 && (
+            <ul className={`program-list ${fetching ? 'is-refreshing' : ''}`}>
+              {programs.map((p) => (
+                <ProgramRow
+                  key={p.id}
+                  program={p}
+                  groups={groups}
+                  tags={tags}
+                  onToggleFavorite={toggleFavorite}
+                  onOpenDetail={openDetail}
+                  onOpenNote={openNote}
+                  onAddToGroup={addToGroup}
+                  onAddTag={addTagToProgram}
+                  onRemoveTag={removeTagFromProgram}
+                />
+              ))}
+            </ul>
+          )}
+
+          {remaining > 0 && !initialLoading && (
+            <div className="load-more">
+              <button className="btn" onClick={() => void loadMore()} disabled={fetching}>
+                {fetching ? 'Chargement…' : `Afficher ${Math.min(remaining, PAGE_SIZE)} de plus (${remaining} restants)`}
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
-      {detailTarget && (
-        <ProgramDetailModal program={detailTarget} onClose={() => setDetailTarget(null)} />
-      )}
+      {detailTarget && <ProgramDetailModal program={detailTarget} onClose={() => setDetailTarget(null)} />}
 
       {noteTarget && (
         <Modal title={`Note — ${noteTarget.name}`} onClose={() => setNoteTarget(null)}>
