@@ -137,7 +137,12 @@ const ProgramRow = memo(function ProgramRow({
               </option>
             ))}
         </select>
-        <button className="icon-btn" aria-label={`Note pour ${p.name}`} title="Note" onClick={() => onOpenNote(p)}>
+        <button
+          className={`icon-btn ${p.note ? 'has-note' : ''}`}
+          aria-label={`Note pour ${p.name}`}
+          title={p.note ? `Note : ${p.note.slice(0, 160)}` : 'Note'}
+          onClick={() => onOpenNote(p)}
+        >
           📝
         </button>
       </div>

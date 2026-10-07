@@ -320,8 +320,12 @@ export function ToolsScreen() {
                             ? 'framework'
                             : tool.source === 'go'
                               ? 'go install'
-                              : 'portable'}
+                              : tool.source === 'pip'
+                                ? 'venv (uv)'
+                                : 'portable'}
                       </span>
+                      {tool.windowsOnly && <span className="badge warn">Windows</span>}
+                      {tool.guiOnly && <span className="badge warn">GUI</span>}
                       {tool.docs && (
                         <button
                           className="btn ghost small"
