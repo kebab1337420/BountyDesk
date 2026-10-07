@@ -146,8 +146,13 @@ describe('ScanRunner - arret de la descendance', () => {
 
     const runner = new ScanRunner(scanId, { stepTimeoutMs: 30_000 })
     const running = runner.run(plan([{ tool: 'node', args: [parentPath] }]))
-    await sleep(1200)
-    expect(existsSync(counter) && statSync(counter).size).toBeGreaterThan(0)
+    // Le petit-fils a le temps de demarrer sous charge : on observe jusqu'a 5 s.
+    let started = false
+    for (let i = 0; i < 50 && !started; i++) {
+      started = existsSync(counter) && statSync(counter).size > 0
+      if (!started) await sleep(100)
+    }
+    expect(started).toBe(true)
 
     runner.stop()
     await running
