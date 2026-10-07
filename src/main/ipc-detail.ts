@@ -57,7 +57,14 @@ export function registerDetailIpc(): void {
   ipcMain.handle(IPC.CredentialsReveal, (_event, rawId) => {
     const id = z.number().int().min(1).parse(rawId)
     try {
-      return { ok: true, secret: revealCredentialSecret(id) } as const
+      const secret = revealCredentialSecret(id)
+      if (secret === null) {
+        return {
+          ok: false,
+          error: 'Secret illisible : déchiffrement impossible (clé ou chiffrement du système indisponible).',
+        } as const
+      }
+      return { ok: true, secret } as const
     } catch (err) {
       return dbResultError(err)
     }

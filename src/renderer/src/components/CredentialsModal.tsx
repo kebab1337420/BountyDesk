@@ -65,8 +65,10 @@ export function CredentialsModal({ program, onClose }: Props) {
         const r = await Api.credentials.update(editing, {
           label: draft.label.trim(),
           username: draft.username,
-          secret: draft.secret,
           note: draft.note,
+          // Champ vide = « garder le secret » : on ne l'envoie pas, sinon il
+          // serait écrasé par un secret vide.
+          ...(draft.secret !== '' ? { secret: draft.secret } : {})
         })
         if (!r.ok) throw new Error(r.error)
       }
@@ -81,10 +83,15 @@ export function CredentialsModal({ program, onClose }: Props) {
   }
 
   const remove = async (id: number): Promise<void> => {
+    if (!window.confirm('Supprimer définitivement cet identifiant ?')) return
     setError(null)
-    const r = await Api.credentials.remove(id)
-    if (!r.ok) setError(r.error)
-    await load()
+    try {
+      const r = await Api.credentials.remove(id)
+      if (!r.ok) setError(r.error)
+      await load()
+    } catch {
+      setError('Échec de la suppression.')
+    }
   }
 
   const copy = async (text: string): Promise<void> => {
