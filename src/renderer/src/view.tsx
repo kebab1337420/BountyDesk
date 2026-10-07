@@ -6,6 +6,12 @@ export default function View(): React.JSX.Element {
   const imgRef = useRef<HTMLImageElement>(null)
   const wsRef = useRef<WebSocket | null>(null)
   const tokenRef = useRef('')
+  const lastFrameUrl = useRef<string | null>(null)
+  // File d'attente souris : un survol envoie des dizaines d'événements par
+  // seconde, on n'émet que la dernière position à 25 Hz (les clics, eux,
+  // partent tout de suite pour rester exacts).
+  const pendingMouse = useRef<Record<string, unknown> | null>(null)
+  const mouseFlush = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [connected, setConnected] = useState(false)
   const [size, setSize] = useState<{ width: number; height: number } | null>(null)
   const [message, setMessage] = useState('Connexion…')
@@ -47,10 +53,11 @@ export default function View(): React.JSX.Element {
           }
         } else {
           const url = URL.createObjectURL(ev.data as Blob)
-          if (imgRef.current) {
-            imgRef.current.onload = () => URL.revokeObjectURL(url)
-            imgRef.current.src = url
-          }
+          // L'image précédente est révoquée dès la suivante : aucun objet
+          // blob ne reste en mémoire, même si onload n'a jamais été atteint.
+          if (lastFrameUrl.current) URL.revokeObjectURL(lastFrameUrl.current)
+          lastFrameUrl.current = url
+          if (imgRef.current) imgRef.current.src = url
         }
       }
       ws.onclose = () => {
@@ -64,33 +71,64 @@ export default function View(): React.JSX.Element {
 
     return () => {
       closed = true
+      if (mouseFlush.current) clearTimeout(mouseFlush.current)
       wsRef.current?.close()
       wsRef.current = null
+      if (lastFrameUrl.current) {
+        URL.revokeObjectURL(lastFrameUrl.current)
+        lastFrameUrl.current = null
+      }
     }
   }, [])
 
-  const sendInput = (type: string, extra: Record<string, unknown>): void => {
+  const sendEvents = (events: Record<string, unknown>[]): void => {
     const ws = wsRef.current
     if (!ws || ws.readyState !== WebSocket.OPEN) return
-    ws.send(JSON.stringify({ type: 'input', events: [{ type, ...extra }] }))
+    ws.send(JSON.stringify({ type: 'input', events }))
+  }
+
+  const sendInput = (type: string, extra: Record<string, unknown>): void => {
+    sendEvents([{ type, ...extra }])
+  }
+
+  const buildMouse = (e: React.MouseEvent<HTMLImageElement>): Record<string, unknown> => {
+    const rect = e.currentTarget.getBoundingClientRect()
+    const payload: Record<string, unknown> = { type: e.type }
+    if (e.type !== 'mousemove') {
+      payload.action = e.type === 'mousedown' ? 'down' : 'up'
+      payload.button = e.button === 0 ? 'left' : e.button === 2 ? 'right' : 'middle'
+    }
+    payload.x = (e.clientX - rect.left) / rect.width
+    payload.y = (e.clientY - rect.top) / rect.height
+    payload.kind = 'relative'
+    return payload
   }
 
   const handleMouse = (e: React.MouseEvent<HTMLImageElement>): void => {
-    const rect = e.currentTarget.getBoundingClientRect()
-    const events: Record<string, unknown> = {}
-    if (e.type === 'mousemove') events.type = 'mousemove'
-    if (e.type === 'mousedown' || e.type === 'mouseup') events.type = e.type
+    const payload = buildMouse(e)
     if (e.type !== 'mousemove') {
-      const button = e.button === 0 ? 'left' : e.button === 2 ? 'right' : 'middle'
-      events.action = e.type === 'mousedown' ? 'down' : 'up'
-      events.button = button
+      // Un clic n'attend pas : la position en attente est vidée d'abord pour
+      // préserver l'ordre chronologique des événements.
+      if (mouseFlush.current) {
+        clearTimeout(mouseFlush.current)
+        mouseFlush.current = null
+      }
+      const pending = pendingMouse.current
+      pendingMouse.current = null
+      if (pending) sendEvents([pending])
+      sendEvents([payload])
+      return
     }
-    events.x = (e.clientX - rect.left) / rect.width
-    events.y = (e.clientY - rect.top) / rect.height
-    events.kind = 'relative'
-    const ws = wsRef.current
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'input', events: [events] }))
+    pendingMouse.current = payload
+    if (!mouseFlush.current) {
+      mouseFlush.current = setTimeout(() => {
+        mouseFlush.current = null
+        const p = pendingMouse.current
+        if (p) {
+          pendingMouse.current = null
+          sendEvents([p])
+        }
+      }, 40)
     }
   }
 
