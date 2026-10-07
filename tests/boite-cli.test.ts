@@ -58,6 +58,26 @@ describe('boite (binaire)', () => {
     expect(result.err).toMatch(/USAGE/)
   })
 
+  it("aide affichée quelle que soit la position de l'option", async () => {
+    for (const args of [['agents', '--help'], ['agents', 'list', '--help'], ['agents', 'wait', '-h']]) {
+      const result = await cli(args)
+      expect(result.code).toBe(0)
+      expect(result.out).toMatch(/Adresses/)
+      expect(result.out).toMatch(/send/)
+    }
+  })
+
+  it('un --timeout inférieur à 1 ms expire au lieu d’attendre sans fin', async () => {
+    arrange((db) => {
+      store.createAgent(db, { name: 'Alpha', threadId: 'alpha' })
+      store.sendMessage(db, { address: 'alpha', body: 'tache: corrige login' })
+      store.runAgent(db, 'alpha')
+    })
+    const result = await cli(['agents', 'wait', 'alpha', '--timeout', '0.0005'])
+    expect(result.code).toBe(4)
+    expect(result.err).toMatch(/TIMEOUT/)
+  })
+
   it('création puis list --json', async () => {
     const created = await cli(['agents', 'create', 'Alpha', '--id', 'alpha'])
     expect(created.code).toBe(0)

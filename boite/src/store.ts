@@ -424,7 +424,7 @@ export async function waitForState(
   const deadline = Date.now() + (options.timeoutMs ?? 0)
   let current = agent.state
   while (isWorking(current)) {
-    if (options.timeoutMs && Date.now() >= deadline) {
+    if (options.timeoutMs !== undefined && Date.now() >= deadline) {
       throw new BoiteError('TIMEOUT', `délai dépassé : '${address}' reste ${current}`)
     }
     await sleep(POLL_MS)
@@ -449,7 +449,7 @@ export async function waitForReply(
     if (reply) return { state: requireAgent(db, address).state, reason: 'reply' }
     const state = requireAgent(db, address).state
     if (state === 'idle') return { state, reason: 'idle' }
-    if (options.timeoutMs && Date.now() >= deadline) {
+    if (options.timeoutMs !== undefined && Date.now() >= deadline) {
       throw new BoiteError('TIMEOUT', `délai dépassé : aucune réponse de '${address}'`)
     }
     await sleep(POLL_MS)

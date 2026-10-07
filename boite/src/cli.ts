@@ -31,6 +31,7 @@ interface Flags {
   ready: boolean
   follow: boolean
   waiting: boolean
+  help: boolean
   refs: string[]
   projects: string[]
   id: string | null
@@ -38,7 +39,7 @@ interface Flags {
   timeout: number | null
 }
 
-const BOOLEAN_FLAGS = new Set(['all', 'json', 'wait', 'ready', 'follow', 'waiting'])
+const BOOLEAN_FLAGS = new Set(['all', 'json', 'wait', 'ready', 'follow', 'waiting', 'help'])
 const VALUE_FLAGS: Record<string, keyof Flags> = {
   ref: 'refs',
   project: 'projects',
@@ -64,6 +65,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     ready: false,
     follow: false,
     waiting: false,
+    help: false,
     refs: [],
     projects: [],
     id: null,
@@ -73,6 +75,10 @@ function parseArgs(argv: string[]): ParsedArgs {
   const positionals: string[] = []
   for (let i = 0; i < argv.length; i++) {
     const token = argv[i] as string
+    if (token === '-h') {
+      flags.help = true
+      continue
+    }
     if (!token.startsWith('--')) {
       positionals.push(token)
       continue
@@ -93,7 +99,9 @@ function parseArgs(argv: string[]): ParsedArgs {
       const n = Number(value)
       if (!Number.isFinite(n) || n <= 0) throw usageError(`valeur invalide pour '--${name}' : ${value}`)
       if (key === 'limit') flags.limit = Math.floor(n)
-      else flags.timeout = Math.floor(n * 1000)
+      // Au minimum 1 ms : un `--timeout 0.0005` plafonné à 0 serait traité
+      // comme « pas de délai » et figerait l'attente pour toujours.
+      else flags.timeout = Math.max(1, Math.floor(n * 1000))
     }
   }
   return { flags, positionals }
@@ -227,9 +235,15 @@ export async function run(argv: string[], options: RunOptions = {}): Promise<num
   }
 
   const { flags, positionals } = parseArgs(argv.slice(1))
+  // `boite agents --help` et `boite agents list --help` doivent afficher l'aide
+  // à n'importe quelle position, pas seulement en premier argument.
+  if (flags.help) {
+    out(HELP)
+    return 0
+  }
   const command = positionals[0]
   const rest = positionals.slice(1)
-  if (!command || command === 'help' || command === '--help') {
+  if (!command || command === 'help' || command === '--help' || command === '-h') {
     out(HELP)
     return 0
   }
