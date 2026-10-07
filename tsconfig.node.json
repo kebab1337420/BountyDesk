@@ -9,6 +9,7 @@
     "resolveJsonModule": true,
     "types": ["node"],
     "strict": true,
+    "allowImportingTsExtensions": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
     "noFallthroughCasesInSwitch": true,
@@ -24,6 +25,7 @@
     "src/preload/**/*",
     "src/shared/**/*",
     "src/services/**/*",
+    "boite/src/**/*",
     "tests/**/*"
   ]
 }
