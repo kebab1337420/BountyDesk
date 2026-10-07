@@ -30,13 +30,15 @@ export function ToolsScreen() {
   const installing = runningIds.size > 0
 
   // La sortie d'installation arrive en continu : elle s'accumule tant que
-  // l'outil tourne, puis le résultat final du handler prend le relais.
+  // l'outil tourne, puis le résultat final du handler prend le relais. Le
+  // tampon est borné — un installateur bavard ne doit pas gonfler l'état du
+  // renderer à l'infini.
   useEffect(() => {
     const off = Api.tools.onInstallOutput(({ id, line }) => {
       setInstallState((prev) => {
         const st = prev[id]
         if (!st || st.status !== 'running') return prev
-        return { ...prev, [id]: { ...st, output: st.output + line } }
+        return { ...prev, [id]: { ...st, output: (st.output + line).slice(-60_000) } }
       })
     })
     return off

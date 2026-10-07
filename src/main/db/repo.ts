@@ -372,8 +372,10 @@ export class Repository {
   getProgram(id: string): ProgramSummary | null {
     const row = this.loadProgram(id)
     if (!row) return null
-    const tags = this.tagsByProgram()
-    const groups = this.groupsByProgram()
+    // Borné au programme demandé : sans cela, ouvrir le detail d'un
+    // programme chargeait les Tags et groupes de TOUT le catalogue.
+    const tags = this.tagsByProgram([id])
+    const groups = this.groupsByProgram([id])
     return this.toSummary(row, tags.get(id) ?? [], groups.get(id) ?? [])
   }
 

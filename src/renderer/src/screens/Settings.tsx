@@ -32,6 +32,16 @@ export function SettingsScreen({ onLogout }: Props) {
   const [session, setSession] = useState<RemoteSessionInfo | null>(null)
   const [sessionHistory, setSessionHistory] = useState<RemoteSessionInfo[]>([])
   const pendingRef = useRef(0)
+  // Battement d'une seconde pendant qu'une demande de session attend une
+  // décision : le compte à rebours et sa couleur restent exacts sans
+  // recharger quoi que ce soit.
+  const [, setPendingTick] = useState(0)
+
+  useEffect(() => {
+    if (!session || session.status !== 'pending') return
+    const ticker = setInterval(() => setPendingTick((x) => x + 1), 1000)
+    return () => clearInterval(ticker)
+  }, [session])
 
   const loadRequests = async () => {
     const res = await Api.mcp.requests(50)

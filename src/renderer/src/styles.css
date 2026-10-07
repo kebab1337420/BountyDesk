@@ -20,6 +20,8 @@
   --radius: 8px;
   --radius-lg: 12px;
   --shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  --shadow-hover: 0 6px 22px rgba(0, 0, 0, 0.35);
+  --ease: cubic-bezier(0.33, 1, 0.68, 1);
   --font-mono: "Cascadia Code", "Consolas", monospace;
   color-scheme: dark;
 }
@@ -33,6 +35,12 @@ body {
   height: 100%;
 }
 
+/* La gouttière de défilement est réservée en permanence : ajouter une
+   barre de défilement ne décale plus d'un pixel le contenu à côté. */
+html {
+  scrollbar-gutter: stable;
+}
+
 body {
   margin: 0;
   background: var(--bg0);
@@ -41,6 +49,7 @@ body {
   font-size: 13.5px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 h1, h2, h3, h4 {
@@ -139,6 +148,41 @@ button:disabled {
   padding: 5px 12px;
 }
 
+/* Indicateur de progression compact, aligné dans les boutons. */
+.spinner {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  margin-right: 6px;
+  vertical-align: -1px;
+  border: 2px solid rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 700ms linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+kbd.search-kbd {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+  background: var(--bg3);
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  padding: 1px 6px;
+  pointer-events: none;
+}
+
 /* ---------- Shell ---------- */
 
 .app {
@@ -202,11 +246,16 @@ button:disabled {
   padding: 8px 10px;
   border-radius: var(--radius);
   font-size: 13.5px;
+  position: relative;
+  transition: color 140ms var(--ease), background 140ms var(--ease);
 }
 
 .nav-item .nav-icon {
   width: 18px;
-  text-align: center;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  flex: none;
 }
 
 .nav-item:hover {
@@ -219,6 +268,19 @@ button:disabled {
   border-color: rgba(91, 140, 255, 0.4);
   color: var(--accent);
   font-weight: 600;
+}
+
+/* Barre d'indication à gauche de l'onglet actif. */
+.nav-item.active::before {
+  content: "";
+  position: absolute;
+  left: -11px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 60%;
+  border-radius: 0 3px 3px 0;
+  background: linear-gradient(180deg, var(--accent), var(--accent-2));
 }
 
 .app-sidebar-foot {
@@ -238,6 +300,69 @@ button:disabled {
   overflow: hidden;
 }
 
+/* Chaque écran visité reste monté dans son propre conteneur ; seul le
+   conteneur actif est affiché, donc la bascule est immédiate. */
+.screen {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  animation: screen-in 220ms var(--ease);
+}
+
+.screen-hidden {
+  display: none;
+}
+
+@keyframes screen-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ---------- Splash ---------- */
+
+.splash {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+}
+
+.splash .brand-mark {
+  width: 46px;
+  height: 46px;
+  font-size: 24px;
+  border-radius: 12px;
+}
+
+.splash .brand-name {
+  font-size: 17px;
+}
+
+.pulse {
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.55;
+    transform: scale(0.94);
+  }
+}
+
 .section {
   flex: 1;
   min-height: 0;
@@ -253,6 +378,14 @@ button:disabled {
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 16px;
+  /* En-tête collant : sur une page longue (Réglages), le titre et les
+     actions restent atteignables sans remonter tout l'écran. */
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  background: var(--bg0);
+  margin: -18px -18px 16px;
+  padding: 18px 18px 8px;
 }
 
 .section-header h2 {
@@ -311,6 +444,7 @@ button:disabled {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  animation: modal-in 260ms var(--ease);
 }
 
 .card h1 {
@@ -471,19 +605,22 @@ select {
   background: none;
   border: none;
   color: var(--muted);
+  width: auto;
+  height: auto;
   padding: 4px 6px;
   font-size: 13px;
   border-radius: 5px;
   opacity: 0;
-  transition: opacity 120ms ease;
+  transition: opacity 120ms var(--ease), color 120ms var(--ease);
 }
 
-.side-row:hover .icon-btn {
+.side-row:hover .icon-btn,
+.side-row .icon-btn:focus-visible {
   opacity: 1;
 }
 
-.icon-btn.danger:hover {
-  color: var(--red);
+.side-row .icon-btn:hover {
+  color: var(--text);
 }
 
 .side-create {
@@ -554,6 +691,128 @@ select {
   gap: 10px;
 }
 
+/* ---------- Search field ---------- */
+
+.search-wrap {
+  position: relative;
+  flex: 1;
+  min-width: 220px;
+  display: flex;
+}
+
+.search-wrap input.search {
+  flex: 1;
+  min-width: 0;
+  padding-right: 34px;
+}
+
+.search-wrap input.search::-webkit-search-cancel-button {
+  display: none;
+}
+
+/* ---------- Toolbar extras ---------- */
+
+.dir-toggle {
+  padding: 8px 11px;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.count-pill {
+  font-variant-numeric: tabular-nums;
+  font-size: 12.5px;
+  transition: opacity 140ms var(--ease);
+}
+
+.count-pill.is-refreshing {
+  opacity: 0.55;
+}
+
+.load-more {
+  display: flex;
+  justify-content: center;
+  padding: 4px 0 8px;
+}
+
+/* ---------- Empty state ---------- */
+
+.empty-state {
+  flex: 1;
+  min-height: 240px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  text-align: center;
+  color: var(--muted);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-lg);
+  padding: 24px;
+}
+
+.empty-state p {
+  margin: 0;
+  max-width: 420px;
+}
+
+.empty-icon {
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  font-size: 20px;
+  color: var(--muted);
+}
+
+/* ---------- Skeleton rows ---------- */
+
+.skeleton-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  background: var(--bg1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 12px 14px;
+}
+
+.skeleton-row .sk-dot {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--bg3);
+  flex: none;
+}
+
+.skeleton-row .sk-lines {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 3px;
+}
+
+.skeleton-row .sk-line {
+  height: 11px;
+  border-radius: 6px;
+  background: linear-gradient(90deg, var(--bg2) 25%, var(--bg3) 50%, var(--bg2) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.3s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
 /* ---------- Program list ---------- */
 
 .program-list {
@@ -566,6 +825,14 @@ select {
   overflow-y: auto;
   flex: 1;
   min-height: 0;
+  transition: opacity 140ms var(--ease);
+}
+
+/* Liste encore en train de se rafraîchir : l'ancien contenu reste visible,
+   simplement atténué, au lieu de clignoter. */
+.program-list.is-refreshing {
+  opacity: 0.55;
+  pointer-events: none;
 }
 
 .program-row {
@@ -576,12 +843,16 @@ select {
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   padding: 12px 14px;
-  transition: border-color 120ms ease, transform 120ms ease, box-shadow 120ms ease;
+  transition: border-color 140ms var(--ease), box-shadow 140ms var(--ease);
+  /* Les lignes hors écran ne sont ni calculées ni peintes : la liste reste
+     fluide même sur des catalogues de plusieurs milliers de programmes. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 96px;
 }
 
 .program-row:hover {
   border-color: var(--border-strong);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.28);
+  box-shadow: var(--shadow-hover);
 }
 
 .star {
@@ -609,6 +880,7 @@ select {
   flex: 1;
   min-width: 0;
   cursor: pointer;
+  border-radius: 6px;
 }
 
 .program-title {
@@ -621,9 +893,11 @@ select {
 .program-name {
   font-weight: 650;
   font-size: 14px;
+  transition: color 120ms var(--ease);
 }
 
-.program-name:hover {
+.program-main:hover .program-name,
+.program-main:focus-visible .program-name {
   color: var(--accent);
 }
 
@@ -691,6 +965,9 @@ select {
   align-items: center;
   gap: 8px;
   flex-shrink: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  max-width: 46%;
 }
 
 .program-actions select {
@@ -713,19 +990,31 @@ select {
   font-weight: 400;
 }
 
+/* Bouton icône compact : une seule définition, surchargée juste en dessous
+   pour les rangées de groupes/tags (fantôme, visible au survol). */
 .icon-btn {
-  background: none;
-  border: none;
-  color: var(--muted);
-  padding: 5px 7px;
+  display: inline-grid;
+  place-items: center;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  color: var(--text);
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 6px;
+  cursor: pointer;
   font-size: 13px;
   line-height: 1;
-  border-radius: 6px;
+  transition: border-color 120ms var(--ease), color 120ms var(--ease);
 }
 
 .icon-btn:hover {
-  color: var(--text);
-  background: var(--bg3);
+  border-color: var(--border-strong);
+}
+
+.icon-btn.danger:hover {
+  border-color: var(--red);
+  color: var(--red);
 }
 
 /* ---------- Modal ---------- */
@@ -739,6 +1028,7 @@ select {
   align-items: center;
   justify-content: center;
   z-index: 50;
+  animation: fade-in 140ms var(--ease);
 }
 
 .modal {
@@ -751,6 +1041,20 @@ select {
   display: flex;
   flex-direction: column;
   box-shadow: var(--shadow);
+  animation: modal-in 180ms var(--ease);
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.985);
+  }
 }
 
 .modal-header {
@@ -867,9 +1171,6 @@ select {
 .cred-label { font-weight: 600; }
 .cred-user, .cred-secret { font-family: var(--font-mono); font-size: 12px; color: var(--cyan); word-break: break-all; }
 .cred-actions { display: flex; gap: 4px; flex: none; }
-.icon-btn { background: var(--bg3); border: 1px solid var(--border); color: var(--text); width: 28px; height: 28px; border-radius: 6px; cursor: pointer; font-size: 13px; line-height: 1; }
-.icon-btn:hover { border-color: var(--border-strong); }
-.icon-btn.danger:hover { border-color: var(--red); color: var(--red); }
 .cred-form { border-top: 1px solid var(--border); padding-top: 14px; }
 .cred-form h4 { margin: 0 0 8px; font-size: 13px; color: var(--muted); }
 .cred-form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px; }
@@ -891,6 +1192,7 @@ select {
 .scan-line.err .scan-msg { color: var(--red); }
 .scan-line.ok .scan-msg { color: var(--green); }
 .scan-history { display: flex; flex-direction: column; gap: 4px; }
+.scan-follow { align-self: flex-end; margin-top: -4px; }
 .scan-h-item { display: flex; gap: 8px; align-items: center; padding: 5px 8px; border-radius: 6px; background: var(--bg2); border: 1px solid var(--border); color: var(--text); cursor: pointer; font-size: 12px; }
 .scan-h-item:hover { border-color: var(--border-strong); }
 .scan-status { font-family: var(--font-mono); font-size: 11px; text-transform: uppercase; padding: 1px 6px; border-radius: 4px; }
@@ -1033,4 +1335,25 @@ select {
   border: none;
   padding: 0;
   font-size: 12px;
+}
+
+/* ---------- Confort & accessibilité ---------- */
+
+::selection {
+  background: rgba(91, 140, 255, 0.35);
+}
+
+/* Les scrollbars ne débordent plus sous les titres collants. */
+.section-header::-webkit-scrollbar {
+  height: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
