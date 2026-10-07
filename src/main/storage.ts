@@ -1,5 +1,5 @@
 import { app, safeStorage } from 'electron'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs'
 import { randomBytes, createCipheriv, createDecipheriv, scryptSync } from 'node:crypto'
 import { dirname, join } from 'path'
 
@@ -42,22 +42,43 @@ function configFile(): string {
   return join(app.getPath('userData'), 'config.json')
 }
 
+/**
+ * config.json contient tous les secrets de l'app : une lecture ratée ne doit
+ * jamais le faire disparaître silencieusement au prochain enregistrement.
+ * Le fichier illisible est mis de côté (.corrupt) et l'évènement est journalisé.
+ */
+function quarantineCorruptConfig(file: string, reason: string): void {
+  console.error(`BountyDesk : config.json illisible (${reason}) — fichier conservé en ${file}.corrupt`)
+  try {
+    renameSync(file, `${file}.corrupt`)
+  } catch {
+    /* le fichier a pu être supprimé entre-temps : rien de plus à faire */
+  }
+}
+
 function readConfig(): StoredConfig {
   const file = configFile()
   if (!existsSync(file)) return {}
+  let parsed: unknown
   try {
-    const parsed = JSON.parse(readFileSync(file, 'utf-8')) as unknown
-    if (parsed && typeof parsed === 'object') return parsed as StoredConfig
-  } catch {
-    // config corrompue : on repart de zéro sans la faire planter
+    parsed = JSON.parse(readFileSync(file, 'utf-8')) as unknown
+  } catch (err) {
+    quarantineCorruptConfig(file, err instanceof Error ? err.message : String(err))
+    return {}
   }
+  if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as StoredConfig
+  quarantineCorruptConfig(file, 'structure inattendue')
   return {}
 }
 
 function writeConfig(config: StoredConfig): void {
   const file = configFile()
   mkdirSync(dirname(file), { recursive: true })
-  writeFileSync(file, JSON.stringify(config), { encoding: 'utf-8', mode: 0o600 })
+  // Écriture atomique : un plantage au milieu d'un writeFileSync tronquerait
+  // config.json et ferait perdre tous les jetons d'un coup.
+  const tmp = `${file}.tmp`
+  writeFileSync(tmp, JSON.stringify(config), { encoding: 'utf-8', mode: 0o600 })
+  renameSync(tmp, file)
 }
 
 function fallbackKeyFile(): string {

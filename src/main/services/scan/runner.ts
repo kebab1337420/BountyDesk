@@ -1,7 +1,10 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { getRepository } from '../../db'
 import { resolveBinary, resolveWordlist } from '../tools/installer'
+import { killTree } from '../proc'
 import type { ScanPlan } from './plan'
+
+export { killTree }
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
@@ -54,46 +57,6 @@ const STEP_TIMEOUT_MS = 30 * 60 * 1000
 /** Plafond d'événements conservés par scan : un outil bavard ne sature pas la base. */
 const MAX_EVENTS = 5000
 
-/**
- * Tue l'outil *et* sa descendance. ffuf, nuclei et httpx lancent des
- * sous-processus ; tuer seulement le pid direct laisserait un scan orphelin
- * continuer le travail sans contrôle ni arrêt possible.
- */
-function killTree(child: ChildProcessWithoutNullStreams): void {
-  const pid = child.pid
-  if (pid === undefined) return
-  if (process.platform === 'win32') {
-    // taskkill /TJoine l'arbre de processus ; on garde le repli direct.
-    spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore', shell: false })
-      .on('error', () => {
-        try {
-          child.kill('SIGKILL')
-        } catch {
-          /* deja mort */
-        }
-      })
-    return
-  }
-  // detached: true fait de l'enfant le meneur de son groupe : le pid negatif
-  // cible le groupe entier.
-  try {
-    process.kill(-pid, 'SIGTERM')
-  } catch {
-    try {
-      child.kill('SIGTERM')
-    } catch {
-      /* deja mort */
-    }
-  }
-  // Escalade si l'outil ignore SIGTERM.
-  setTimeout(() => {
-    try {
-      process.kill(-pid, 'SIGKILL')
-    } catch {
-      /* groupe deja disparu */
-    }
-  }, 3000).unref()
-}
 
 export interface ScanRunnerOptions {
   /** Plafond d'une étape de scan, en ms. */
@@ -215,6 +178,7 @@ export class ScanRunner {
             const wlOutcome = await this.runStep(step.tool, args)
             if (wlOutcome === 'missing') missingTools.add(step.tool)
             else if (wlOutcome === 'timeout') timedOutTools.add(step.tool)
+            else ranTools += 1
             if (this.stopped) break
             await sleep(intervalMs)
             continue

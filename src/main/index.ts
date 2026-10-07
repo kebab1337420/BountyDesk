@@ -10,6 +10,7 @@ import { registerToolsIpc } from './ipc-tools'
 import { registerMcpIpc, restoreAutostartMcp } from './ipc-mcp'
 import { registerBrowserIpc } from './ipc-browser'
 import { installSecurity } from './security'
+import { closeDb, getRepository } from './db'
 import { purgeInstallResidues } from './services/tools/installer'
 import { setMainWindow } from './window'
 
@@ -44,6 +45,9 @@ if (!gotLock) {
     restoreAutostartMcp()
     registerBrowserIpc()
     purgeInstallResidues()
+    // Un scan "running" datant d'un arrêt précédent ne peut plus progresser :
+    // on le referme en erreur pour que l'UI cesse de l'attendre.
+    getRepository().failOrphanScans()
     mainWindow = createWindow()
 
     app.on('activate', () => {
@@ -57,6 +61,32 @@ if (!gotLock) {
     if (process.platform !== 'darwin') {
       app.quit()
     }
+  })
+
+  // Fermeture propre : SQLite referme son WAL (checkpoint final) au lieu d'être
+  // tué en pleine écriture par la fin du processus.
+  app.on('before-quit', () => {
+    closeDb()
+  })
+
+  // Un renderer qui plante ne doit pas laisser une fenêtre blanche : on
+  // recharge, mais sans boucler si le crash se répète.
+  let rendererReloads = 0
+  let rendererReloadWindow = 0
+  app.on('render-process-gone', (_event, contents, details) => {
+    if (details.reason === 'clean-exit') return
+    const now = Date.now()
+    if (now - rendererReloadWindow > 30_000) {
+      rendererReloadWindow = now
+      rendererReloads = 0
+    }
+    if (rendererReloads >= 3) {
+      console.error(`BountyDesk : renderer disparu (${details.reason}) — rechargements multiples, abandon.`)
+      return
+    }
+    rendererReloads += 1
+    console.error(`BountyDesk : renderer disparu (${details.reason}) — rechargement.`)
+    contents.reload()
   })
 }
 
