@@ -1,5 +1,7 @@
 # Venari
 
+> **Compatible [Boite](https://github.com/beboite/boite)** : Venari est pensé pour le fonctionner aux côtés de Boite — coordination d'agents, threads par projet, previews et navigateur intégrés pour valider vos finds.
+
 Application desktop Windows et Linux pour chasser sur la plateforme de bug bounty **Intigriti** : catalogue de programmes, favoris/groups/tags/notes locaux, veille sur le scope, scans de profondeur low/med/high, catalogue de **286 outils** de pen-test installables, et un serveur MCP local pour piloter le tout depuis une IA (Claude, opencode…).
 
 **Venari est un outil de lecture/assistance. Il ne soumet jamais de rapport automatiquement, et aucun scan n'est lancé sans confirmation explicite des règles d'engagement.**
