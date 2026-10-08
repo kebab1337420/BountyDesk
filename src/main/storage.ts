@@ -48,7 +48,7 @@ function configFile(): string {
  * Le fichier illisible est mis de côté (.corrupt) et l'évènement est journalisé.
  */
 function quarantineCorruptConfig(file: string, reason: string): void {
-  console.error(`BountyDesk : config.json illisible (${reason}) — fichier conservé en ${file}.corrupt`)
+  console.error(`Venari : config.json illisible (${reason}) — fichier conservé en ${file}.corrupt`)
   try {
     renameSync(file, `${file}.corrupt`)
   } catch {

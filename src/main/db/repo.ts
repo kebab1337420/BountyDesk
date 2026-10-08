@@ -579,7 +579,7 @@ export class Repository {
     const evt = this.db.prepare(
       'INSERT INTO scan_events (scan_id, seq, ts, level, message) VALUES (?, ?, ?, ?, ?)'
     )
-    const message = "Scan interrompu par l’arrêt ou le redémarrage de BountyDesk."
+    const message = "Scan interrompu par l’arrêt ou le redémarrage de Venari."
     this.db.exec('BEGIN')
     try {
       for (const row of rows) {

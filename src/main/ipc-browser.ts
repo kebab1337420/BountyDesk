@@ -136,7 +136,7 @@ function getOrCreateBrowserWindow(): BrowserWindow {
 
   const { BrowserWindow } = require('electron') as typeof import('electron')
   const win = new BrowserWindow({
-    title: 'BountyDesk - Navigateur Assistant',
+    title: 'Venari - Navigateur Assistant',
     width: 1280,
     height: 860,
     minWidth: 720,

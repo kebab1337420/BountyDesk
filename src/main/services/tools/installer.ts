@@ -397,8 +397,8 @@ export async function currentTools(): Promise<ToolEntry[]> {
 
 function githubHeaders(): Record<string, string> {
   const token = process.env.GITHUB_TOKEN ?? loadGithubToken()
-  if (!token) return { 'User-Agent': 'BountyDesk/0.1' }
-  return { 'User-Agent': 'BountyDesk/0.1', Authorization: `Bearer ${token}` }
+  if (!token) return { 'User-Agent': 'Venari/0.1' }
+  return { 'User-Agent': 'Venari/0.1', Authorization: `Bearer ${token}` }
 }
 
 /**

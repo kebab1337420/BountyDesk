@@ -94,7 +94,7 @@ export function serializeExport(records: ProgramSummary[], format: 'csv' | 'json
 
 export function exportFileName(format: 'csv' | 'json', at: number = Date.now()): string {
   const day = new Date(at).toISOString().slice(0, 10)
-  return `bountydesk-programmes-${day}.${format}`
+  return `venari-programmes-${day}.${format}`
 }
 
 /**

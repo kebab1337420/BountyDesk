@@ -106,7 +106,7 @@ function handleError(err: unknown): { ok: false; error: string } {
   return { ok: false, error: err instanceof Error ? err.message : String(err) }
 }
 
-const FIREWALL_RULE = 'BountyDesk MCP'
+const FIREWALL_RULE = 'Venari MCP'
 
 function runNetsh(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
@@ -382,7 +382,7 @@ export function registerMcpIpc(): void {
             ok: false,
             error:
               'Exposition réseau refusée : le réseau actif n’est pas privé (10/8, 172.16/12, 192.168/16). ' +
-              'BountyDesk n’écoute que sur 127.0.0.1 ici.',
+              'Venari n’écoute que sur 127.0.0.1 ici.',
           }
         }
         const targetPort = port ?? cfg.port ?? DEFAULT_PORT
@@ -575,7 +575,7 @@ export function registerMcpIpc(): void {
         const row = r.row
         const main = getMainWindow()
         const n = new Notification({
-          title: 'BountyDesk · Demande de session',
+          title: 'Venari · Demande de session',
           body: `${row.agentLabel || 'Machine distante'} · ${row.remoteIp || '—'} demande à s'afficher`,
         })
         n.on('click', () => {
@@ -675,7 +675,7 @@ export function restoreAutostartMcp(): void {
       agentTokens: cfg.agents ?? [],
     }).catch((err: unknown) => {
       // Jamais de rejection silencieuse au démarrage (port occupé, etc.).
-      console.error('BountyDesk : démarrage automatique du serveur MCP échoué :', err)
+      console.error('Venari : démarrage automatique du serveur MCP échoué :', err)
     })
   }
 }

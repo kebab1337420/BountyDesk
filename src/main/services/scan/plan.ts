@@ -59,7 +59,7 @@ function isPrivateHost(rawHost: string): boolean {
   )
 }
 
-const UA = 'BountyDesk-scan/1.0'
+const UA = 'Venari-scan/1.0'
 
 export interface PlanOptions {
   userAgent?: string | null

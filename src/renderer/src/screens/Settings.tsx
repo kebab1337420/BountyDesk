@@ -327,7 +327,7 @@ export function SettingsScreen({ onLogout }: Props) {
       <div className="box">
         <h3>Assistant IA (protocole MCP)</h3>
         <p className="muted-text">
-          Expose BountyDesk à des IA (Claude Desktop, opencode, Cursor…) via un serveur MCP. Chaque poste/IA a son jeton
+          Expose Venari à des IA (Claude Desktop, opencode, Cursor…) via un serveur MCP. Chaque poste/IA a son jeton
           dédié. L'IA peut lister les programmes, lire le scope et les ROE, installer les outils et lancer des scans
           low/med/high (toujours filtrés in-scope + confirmation ROE). <strong>Jamais de soumission de rapport
           automatique.</strong>
@@ -431,7 +431,7 @@ export function SettingsScreen({ onLogout }: Props) {
                       </div>
                       <div className="mcp-row">
                         <span>Pare-feu&nbsp;:&nbsp;</span>
-                        {diag.firewall === 'ok' && <span className="mcp-status-ok">règle « BountyDesk MCP » présente</span>}
+                        {diag.firewall === 'ok' && <span className="mcp-status-ok">règle « Venari MCP » présente</span>}
                         {diag.firewall === 'missing' && (
                           <>
                             <span className="mcp-status-err">règle absente — le LAN peut être bloqué</span>
@@ -507,7 +507,7 @@ export function SettingsScreen({ onLogout }: Props) {
                 <div className="mcp-box">
                   <h4>Machines à distance (vision)</h4>
                   <p className="muted-text">
-                    Les postes qui exécutent l'agent BountyDesk peuvent demander à vous montrer leur écran. Chaque
+                    Les postes qui exécutent l'agent Venari peuvent demander à vous montrer leur écran. Chaque
                     demande nécessite votre validation ici, à l'écran.
                   </p>
                   {session && (

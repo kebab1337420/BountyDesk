@@ -104,8 +104,8 @@ describe('serializeExport', () => {
 
 describe('exportFileName / exportQuery', () => {
   it('nomme le fichier avec la date du jour et le format', () => {
-    expect(exportFileName('csv', Date.UTC(2026, 5, 17))).toBe('bountydesk-programmes-2026-06-17.csv')
-    expect(exportFileName('json', Date.UTC(2026, 5, 17))).toBe('bountydesk-programmes-2026-06-17.json')
+    expect(exportFileName('csv', Date.UTC(2026, 5, 17))).toBe('venari-programmes-2026-06-17.csv')
+    expect(exportFileName('json', Date.UTC(2026, 5, 17))).toBe('venari-programmes-2026-06-17.json')
   })
 
   it('exporte tout ce qui est filtré, sans pagination', () => {

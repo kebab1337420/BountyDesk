@@ -79,10 +79,10 @@ describe('selectTargets', () => {
 
   it('garde le user-agent par défaut si les ROE n’en imposent pas', () => {
     const plan = buildPlan('low', ['https://a.example.com'], 1)
-    expect(plan.userAgent).toBe('BountyDesk-scan/1.0')
+    expect(plan.userAgent).toBe('Venari-scan/1.0')
     const curl = plan.steps[0]!
     expect(curl.args).toContain('-A')
-    expect(curl.args).toContain('BountyDesk-scan/1.0')
+    expect(curl.args).toContain('Venari-scan/1.0')
     expect(curl.args).not.toContain('-H')
   })
 })

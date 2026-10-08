@@ -39,7 +39,7 @@ export function exeCandidates(id: string, exeName?: string): string[] {
   return [...new Set(ordered)].filter((n) => all.includes(n))
 }
 
-/** Nom de fichier du binaire portable installé par BountyDesk. */
+/** Nom de fichier du binaire portable installé par Venari. */
 export function portableBinaryName(id: string, exeName?: string): string {
   const stem = exeName ?? id
   return `${stem}${exeSuffix()}`

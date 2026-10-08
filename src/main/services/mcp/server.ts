@@ -242,7 +242,7 @@ function computeCvssBase(raw: string): CvssComputation {
 
 const PAGE_TIMEOUT_MS = 15_000
 const PAGE_MAX_REDIRECTS = 5
-const PAGE_USER_AGENT = 'BountyDesk/0.1 (lecteur de page pour agent IA, GET seul)'
+const PAGE_USER_AGENT = 'Venari/0.1 (lecteur de page pour agent IA, GET seul)'
 
 const HTML_ENTITIES: Record<string, string> = {
   nbsp: ' ', amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", '#39': "'", '#x27': "'",
@@ -468,10 +468,10 @@ function isAllowedRunTool(tool: string): boolean {
 const runToolDef: McpToolDef = {
   name: 'run_tool',
   description:
-    'Exécute un binaire du catalogue BountyDesk (portable dans le dossier tools de BountyDesk, ou binaire PATH comme'
+    'Exécute un binaire du catalogue Venari (portable dans le dossier tools de Venari, ou binaire PATH comme'
     + ' nmap/ffuf) ou un binaire système de confiance (interpréteurs : node, python, php, ruby, perl, java, go ;'
     + ' coquilles : sh, bash ; réseau : curl, wget, openssl, dig ; fichiers : cat, grep, sed, awk, find).'
-    + ' en une chaîne, cwd optionnel (doit être sous le dossier tools de BountyDesk), timeout par défaut 120 s. Toute'
+    + ' en une chaîne, cwd optionnel (doit être sous le dossier tools de Venari), timeout par défaut 120 s. Toute'
     + ' invocation est journalisée (Activité des IA). À n’utiliser que sur des cibles autorisées, dans le scope et selon les ROE.',
   inputSchema: {
     type: 'object',
@@ -509,7 +509,7 @@ const runToolDef: McpToolDef = {
       const root = toolsRoot.toLowerCase().replace(/[\\/]+$/, '')
       const insideRoot = lower === root || lower.startsWith(root + '\\') || lower.startsWith(root + '/')
       if (!insideRoot) {
-        return { text: 'cwd hors périmètre autorisé (dossier tools BountyDesk)', isError: true }
+        return { text: 'cwd hors périmètre autorisé (dossier tools Venari)', isError: true }
       }
       cwd = abs
     }
@@ -562,7 +562,7 @@ const runToolDef: McpToolDef = {
 const TOOL_DEFS: McpToolDef[] = [
   {
     name: 'list_programs',
-    description: "Liste les programmes bug bounty du catalogue local (BountyDesk). Recherche par nom/handle et filtre favoris."
+    description: "Liste les programmes bug bounty du catalogue local (Venari). Recherche par nom/handle et filtre favoris."
       + ' Retourne les enregistrements de programmes (prime min/max, statut, tags, groupes, favori).'
       + ' Paginé : au-delà de 200 programmes, préciser offset pour lire la suite (total et hasMore sont dans details).',
     inputSchema: {
@@ -720,7 +720,7 @@ const TOOL_DEFS: McpToolDef[] = [
   },
   {
     name: 'list_tools',
-    description: "État d'installation des outils bug bounty du catalogue BountyDesk (nmap, nuclei, ffuf, gobuster, etc.)."
+    description: "État d'installation des outils bug bounty du catalogue Venari (nmap, nuclei, ffuf, gobuster, etc.)."
       + ' Retourne pour chaque outil si le binaire est installé.',
     inputSchema: { type: 'object', properties: {} },
     handler: async () => {
@@ -752,7 +752,7 @@ const TOOL_DEFS: McpToolDef[] = [
     name: 'open_browser',
     description: "Ouvre le navigateur intégré de l'onglet Assistant (une seule fenêtre au lieu d'empiler des onglets)"
       + ' et y affiche une URL. Ouvre une page d\'accueil si url est omis. Seuls http et https sont acceptés.'
-      + " Le site est rendu dans une iframe sandboxée : il ne peut soumettre aucun rapport ni appeler l'API de BountyDesk."
+      + " Le site est rendu dans une iframe sandboxée : il ne peut soumettre aucun rapport ni appeler l'API de Venari."
       + ' Utilise-le pour lire une doc, un scope ou un advisory. Ne l\'utilise jamais pour soumettre quoi que ce soit.',
     inputSchema: {
       type: 'object',
@@ -1309,7 +1309,7 @@ async function route(req: IncomingMessage, res: ServerResponse): Promise<void> {
       sendRpcResult(res, id, {
         protocolVersion: PROTOCOL_VERSION,
         capabilities: { tools: {} },
-        serverInfo: { name: 'BountyDesk', version: pkg.version },
+        serverInfo: { name: 'Venari', version: pkg.version },
       })
       return
     }

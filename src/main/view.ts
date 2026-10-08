@@ -11,7 +11,7 @@ const viewTokens = new Map<number, string>()
 
 export function openAgentView(viewToken: string, label: string): void {
   const win = new BrowserWindow({
-    title: `BountyDesk · Vue distante — ${label}`,
+    title: `Venari · Vue distante — ${label}`,
     width: 1280,
     height: 800,
     minWidth: 640,

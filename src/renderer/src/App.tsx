@@ -115,7 +115,7 @@ export function App() {
     return (
       <div className="splash">
         <span className="brand-mark pulse">◮</span>
-        <span className="brand-name">BountyDesk</span>
+        <span className="brand-name">Venari</span>
         {statusError ? (
           <div style={{ textAlign: 'center' }}>
             <p>Impossible de vérifier la session locale.</p>
@@ -152,7 +152,7 @@ export function App() {
       <aside className="app-sidebar">
         <div className="app-brand">
           <span className="brand-mark">◮</span>
-          <span className="brand-name">BountyDesk</span>
+          <span className="brand-name">Venari</span>
         </div>
         <nav className="nav" aria-label="Navigation principale">
           {NAV.map((item) => (

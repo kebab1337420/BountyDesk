@@ -105,7 +105,7 @@ export class IntigritiClient {
         headers: {
           Authorization: `Bearer ${token}`,
           Accept: 'application/json',
-          'User-Agent': 'BountyDesk/0.1'
+          'User-Agent': 'Venari/0.1'
         },
         signal: AbortSignal.timeout(this.timeoutMs)
       })

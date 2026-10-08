@@ -1,8 +1,8 @@
-# BountyDesk
+# Venari
 
 Application desktop Windows et Linux pour chasser sur la plateforme de bug bounty **Intigriti** : catalogue de programmes, favoris/groups/tags/notes locaux, veille sur le scope, scans de profondeur low/med/high, catalogue de **286 outils** de pen-test installables, et un serveur MCP local pour piloter le tout depuis une IA (Claude, opencode…).
 
-**BountyDesk est un outil de lecture/assistance. Il ne soumet jamais de rapport automatiquement, et aucun scan n'est lancé sans confirmation explicite des règles d'engagement.**
+**Venari est un outil de lecture/assistance. Il ne soumet jamais de rapport automatiquement, et aucun scan n'est lancé sans confirmation explicite des règles d'engagement.**
 
 ## Prérequis
 
@@ -102,7 +102,7 @@ Le port MCP n'est volontairement pas vérifié par les jobs de smoke test : le s
 - Écran **Programmes** : liste paginée (recherche avec debounce, filtre favoris, tri nom/prime/récent, sens croissant/décroissant). La page affiche `x / y programmes` et le bouton **Charger la suite** déroule au-delà des 200 premiers — le catalogue n'est plus tronqué en silence.
 - **Exporter** : sélecteur CSV / JSON, avec les **filtres courants** (favori, groupe, tag, recherche), la pagination ignorée. Le fichier est écrit à l'emplacement choisi au système. CSV en UTF-8 avec BOM (Excel l'ouvre sans réglage), cellules échappées à la norme RFC 4180 et préfixées quand elles commenceraient par `=`, `+`, `-` ou `@` (injection de formule).
 - **Synchroniser** importe le catalogue (paginated, limite ~400 requêtes / 5 min gérée par un token bucket, retry en backoff sur 429/5xx).
-- Favoris, groupes, tags et notes : **stockés localement en SQLite**, indépendants de l'API (lecture seule). Base : `%APPDATA%\BountyDesk\bountydesk.db` sous Windows, `~/.config/BountyDesk/bountydesk.db` sous Linux (chemins XDG standard, résolus par `app.getPath('userData')`).
+- Favoris, groupes, tags et notes : **stockés localement en SQLite**, indépendants de l'API (lecture seule). Base : `%APPDATA%\Venari\bountydesk.db` sous Windows, `~/.config/Venari/bountydesk.db` sous Linux (chemins XDG standard, résolus par `app.getPath('userData')`).
 
 ### Détail de mission et credentials
 - Clic sur un programme → modal **Détails** : badges (statut/type/confidentialité/secteur), primes min/max, **règles d'engagement (ROE)** complètes (Intigriti Me, outils automatisés, user-agent, header autorisé, safe harbour, pièces jointes) et **scope in/out** (domaines, tiers, skills requis), lien vers la page programme.
@@ -134,13 +134,13 @@ Détails qui comptent :
 - **Timeouts** : toute commande d'installation/extraction a un budget de 5 min, la détection 10 s. Un `git clone` bloqué ne fige plus l'app.
 - **Purge au démarrage** : archives `.download.*` et dossiers `.tmp` laissés par une installation interrompue sont supprimés au lancement.
 
-- **Détection d'abord** : avant toute installation, BountyDesk cherche le binaire dans le `PATH` (via le champ `detectCmd`). Installer un outil déjà présent est sans effet, et les noms diffèrent entre plateformes (`ripgrep`→`rg`, `bat`→`batcat`, `fd`→`fdfind`, `wireshark`→`tshark`, `powershell`→`pwsh`…).
+- **Détection d'abord** : avant toute installation, Venari cherche le binaire dans le `PATH` (via le champ `detectCmd`). Installer un outil déjà présent est sans effet, et les noms diffèrent entre plateformes (`ripgrep`→`rg`, `bat`→`batcat`, `fd`→`fdfind`, `wireshark`→`tshark`, `powershell`→`pwsh`…).
 - **Portables multi-plateformes** : pour chaque binaire GitHub, l'asset de release est choisi en fonction de la plateforme hôte (nom du binaire sans extension sous Linux, suffixe `.exe` sous Windows, `chmod +x` à l'installation). Un asset ambigu ou absent produit une erreur explicite, jamais un faux « installé ».
 - **Outils signalés non disponibles** : 23 entrées sont marquées Windows-only (Sysinternals, PowerToys, Windows Terminal…) et 29 sont des applications graphiques ; l'app refuse de tenter une installation qui n'a pas de sens sur la plateforme, avec une explication.
 - **Token GitHub optionnel** (écran Outils) : les downloads passent par l'API GitHub, qui est limitée à 60 requêtes/heure sans authentification. Le token est chiffré au repos.
 
 ### MCP (IA)
-- Écran **Réglages → IA** : activer un serveur MCP HTTP (port défaut `8787`), exposable **sur le réseau local (LAN)** pour piloter BountyDesk depuis plusieurs PC, avec **un jeton nommé par PC/IA** (jetons chiffrés, révocation en 1 clic, jamais listés dans le README ni les logs).
+- Écran **Réglages → IA** : activer un serveur MCP HTTP (port défaut `8787`), exposable **sur le réseau local (LAN)** pour piloter Venari depuis plusieurs PC, avec **un jeton nommé par PC/IA** (jetons chiffrés, révocation en 1 clic, jamais listés dans le README ni les logs).
 - **Aucun secret ne traverse le pont vers l'interface** : les jetons MCP et d'agent sont affichés masqués (`••••••••1234`), le bouton « Copier » fait écrire dans le presse-papier par le processus principal, et les extraits de configuration affichent `<JETON>`. Même règle pour les mots de passe enregistrés : la liste ne contient qu'un booléen « a un secret », le déchiffrement n'arrive que pour la ligne dont l'utilisateur demande la révélation.
 - Adresse du serveur (locale et LAN) copiable en 1 clic, et un tableau **Activité des IA** journalise chaque appel d'outil (poste, outil, statut, durée).
 - **Outils MCP** (16) : `list_programs` (paginé : `limit` / `offset`, total annoncé dans `details`), `get_program_detail`, `list_credentials` (sans secret), `set_note` / `list_notes` (notes horodatées, lecture seule pour la seconde), `list_tools`, `install_tool`, `open_browser`, `fetch_page`, `list_scans`, `start_scan` (mêmes garde-fous que l'UI), `get_scan`, `scan_events`, `dedupe_findings`, `cvss_score`, `run_tool` (exécution *encadrée* d'un binaire du catalogue, whitelist stricte par défaut).
@@ -148,16 +148,16 @@ Détails qui comptent :
 - Pare-feu : l'app vérifie l'état de la règle d'ouverture du port et sait la créer — `netsh` sous Windows, `ufw` / `firewall-cmd` via `pkexec` sous Linux. Sur les autres plateformes, l'état est honnêtement rapporté « non géré ». La règle est **limitée au réseau privé** (profils `private` sous Windows, sources RFC1918 sous Linux) et **retirée à la désactivation du serveur**.
 - **Le mode LAN n'est accordé que sur un réseau privé** (10/8, 172.16/12, 192.168/16). La vérification est faite dans `startMcpServer` lui-même : aucun appelant ne peut obtenir `0.0.0.0` depuis un café ou un partage public, même en le demandant explicitement.
 
-### Agent IA (pont Claude Code → BountyDesk)
+### Agent IA (pont Claude Code → Venari)
 - Dossier `agent/` : un **pack prêt à copier** dans un dossier de mission pour donner à Claude Code un workflow encadré (sélection de programmes, vérification ROE avec verdicts *refuse/restreint/légitime*, choix low/med/high, scan puis tri des résultats, brouillon de rapport dans `reports/` — **jamais de soumission**).
 - Contenu : `CLAUDE.md` (garde-fous non négociables), deux skills (`.claude/skills/bountydesk-hunt`, `bountydesk-roe-check`), un agent `hunt-validated` (demande validation humaine avant exécution), et un gabarit `.mcp.json`.
 - Mise en place : activer l'IA dans Réglages, copier l'URL + le jeton (1 clic), les placer dans `cibles/<mission>/.mcp.json`. Détails dans `agent/README.md`.
 
 ### Agent distant Rust
 
-`remote-agent/` contient un agent Rust qui streame l'écran d'un second poste vers la vue isolée de BountyDesk.
+`remote-agent/` contient un agent Rust qui streame l'écran d'un second poste vers la vue isolée de Venari.
 
-> **Cet agent est Windows uniquement.** La capture (BitBlt/GetDIBits) et l'injection d'entrées (SendInput) utilisent l'API Win32 déclarée en FFI brut dans `remote-agent/src/main.rs`, sans couche de portage. Un `cargo build` hors de Windows s'arrête volontairement sur un `compile_error!` explicite. Le reste de BountyDesk, lui, tourne sur Windows et Linux.
+> **Cet agent est Windows uniquement.** La capture (BitBlt/GetDIBits) et l'injection d'entrées (SendInput) utilisent l'API Win32 déclarée en FFI brut dans `remote-agent/src/main.rs`, sans couche de portage. Un `cargo build` hors de Windows s'arrête volontairement sur un `compile_error!` explicite. Le reste de Venari, lui, tourne sur Windows et Linux.
 
 C'est un binaire **compilé séparément** :
 

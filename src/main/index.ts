@@ -1,5 +1,5 @@
 import { app, BrowserWindow } from 'electron'
-import { existsSync } from 'node:fs'
+import { existsSync, renameSync } from 'node:fs'
 import { join } from 'path'
 import { restoreToken } from './app-state'
 import { registerIpc } from './ipc'
@@ -15,6 +15,24 @@ import { purgeInstallResidues } from './services/tools/installer'
 import { setMainWindow } from './window'
 
 const APP_ID = 'com.bountydesk.app'
+
+// Avant le renommage BountyDesk -> Venari, les donnees (config.json,
+// bountydesk.db, tools/) vivaient dans %APPDATA%\BountyDesk. Le productName
+// etant desormais Venari, Electron pointe vers un nouveau dossier : on
+// deplace l'ancien une seule fois, si le nouveau est encore vide d'existence.
+function migrateLegacyUserData(): void {
+  try {
+    const legacy = join(app.getPath('appData'), 'BountyDesk')
+    const current = app.getPath('userData')
+    if (legacy.toLowerCase() === current.toLowerCase()) return
+    if (existsSync(legacy) && !existsSync(current)) {
+      renameSync(legacy, current)
+      console.log(`Venari : donnees migratees de ${legacy} vers ${current}`)
+    }
+  } catch (err) {
+    console.error(`Venari : migration du dossier de donnees impossible (${err}) — on continue avec ${app.getPath('userData')}`)
+  }
+}
 
 let mainWindow: BrowserWindow | null = null
 
@@ -33,6 +51,7 @@ if (!gotLock) {
   })
 
   void app.whenReady().then(() => {
+    migrateLegacyUserData()
     app.setAppUserModelId(APP_ID)
     installSecurity()
     restoreToken()
@@ -81,11 +100,11 @@ if (!gotLock) {
       rendererReloads = 0
     }
     if (rendererReloads >= 3) {
-      console.error(`BountyDesk : renderer disparu (${details.reason}) — rechargements multiples, abandon.`)
+      console.error(`Venari : renderer disparu (${details.reason}) — rechargements multiples, abandon.`)
       return
     }
     rendererReloads += 1
-    console.error(`BountyDesk : renderer disparu (${details.reason}) — rechargement.`)
+    console.error(`Venari : renderer disparu (${details.reason}) — rechargement.`)
     contents.reload()
   })
 }
@@ -94,7 +113,7 @@ function createWindow(): BrowserWindow {
   // En dev l'icône vient du dépôt ; empaquetée elle est portée par l'exécutable.
   const windowIcon = join(app.getAppPath(), 'build', 'icon.ico')
   const window = new BrowserWindow({
-    title: 'BountyDesk',
+    title: 'Venari',
     icon: existsSync(windowIcon) ? windowIcon : undefined,
     width: 1120,
     height: 760,

@@ -27,7 +27,7 @@ export function LoginScreen({ onLoggedIn }: { onLoggedIn: () => void }) {
   return (
     <div className="shell login">
       <form className="card" onSubmit={(event) => void submit(event)}>
-        <h1>BountyDesk</h1>
+        <h1>Venari</h1>
         <p className="muted">Colle ton Personal Access Token Intigriti (jamais stocké en clair, chiffré localement).</p>
         <input
           type="password"

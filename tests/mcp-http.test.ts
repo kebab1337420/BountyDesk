@@ -20,7 +20,7 @@ vi.mock('node:child_process', async (importOriginal) => {
     _opts: unknown,
     cb: (err: Error | null, stdout: string, stderr: string) => void
   ): unknown => {
-    cb(null, 'BountyDesk', '')
+    cb(null, 'Venari MCP', '')
     return {}
   }
   return { ...actual, execFile, default: { ...actual, execFile } }
@@ -136,7 +136,7 @@ describe('serveur MCP (HTTP réel)', () => {
     }
     expect(json.result.protocolVersion).toBe('2024-11-05')
     expect(json.result.capabilities.tools).toBeTruthy()
-    expect(json.result.serverInfo.name).toBe('BountyDesk')
+    expect(json.result.serverInfo.name).toBe('Venari')
   })
 
   it('refuse sans token ou avec un mauvais token (401)', async () => {
@@ -485,7 +485,7 @@ describe('outils MCP ajoutés (notes, page, scans, dedupe, CVSS)', () => {
 
     expect(pageRequests).toHaveLength(1)
     const headers = pageRequests[0]!.headers
-    expect(String(headers['user-agent'])).toContain('BountyDesk')
+    expect(String(headers['user-agent'])).toContain('Venari')
     expect(headers.cookie).toBeUndefined()
     expect(headers.authorization).toBeUndefined()
   })
