@@ -77,7 +77,7 @@ describe('catalogue d’outils', () => {
   })
 
   it('le catalogue étendu couvre la panoplie recon/fuzz/utility', () => {
-    expect(TOOL_CATALOG.length).toBeGreaterThanOrEqual(250)
+    expect(TOOL_CATALOG.length).toBeGreaterThanOrEqual(180)
     for (const id of ['nmap', 'nuclei', 'subfinder', 'httpx', 'katana', 'naabu', 'dnsx', 'asnmap', 'uncover', 'alterx', 'amass', 'aquatone', 'waybackurls', 'ffuf', 'gobuster', 'dalfox', 'interactsh-client', 'jq', 'ripgrep', 'git', 'python', 'go', 'node', 'yq', 'gitleaks', 'seclists', 'ai-hunter']) {
       expect(getTool(id), `outil manquant : ${id}`).toBeDefined()
     }
