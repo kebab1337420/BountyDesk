@@ -3,6 +3,7 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
@@ -118,10 +119,46 @@ jobs:
           name: dist-${{ matrix.os }}
           path: |
             dist/*.exe
+            dist/*.blockmap
             dist/*.AppImage
             dist/*.deb
+            dist/latest*.yml
           if-no-files-found: error
           retention-days: 14
+
+  # Tag v* -> attache les artefacts du build a la release GitHub correspondante.
+  # Sans ce job, les releases etaient creees vides (exe, blockmap et latest.yml
+  # manquants) : c'est ce qu'a constate la release 0.3.0.
+  release:
+    name: release (artefacts attaches)
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [package]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Creer la release si elle n'existe pas
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+              --generate-release-notes --verify-tag
+
+      - name: Attacher setup, blockmap et latest.yml
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mapfile -t files < <(find dist -type f \( \
+            -name '*.exe' -o -name '*.blockmap' -o -name 'latest*.yml' -o \
+            -name '*.AppImage' -o -name '*.deb' \))
+          test ${#files[@]} -gt 0 || { echo "::error::aucun artefact a attacher"; exit 1; }
+          gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber "${files[@]}"
 
   agent:
     name: agent Rust (Windows)
