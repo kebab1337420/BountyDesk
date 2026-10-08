@@ -24,9 +24,9 @@ Autres prérequis communs :
 
 | Plateforme | Artefact | Contenu |
 | --- | --- | --- |
-| Windows | `dist/BountyDesk-Setup-<version>.exe` (NSIS) | dossier d'installation au choix, raccourcis bureau et menu démarrer, désinstallation propre |
-| Linux | `dist/bountydesk-<version>.AppImage` | auto-portable : `chmod +x` puis lancer, aucun privilège requis |
-| Linux | `dist/bountydesk_<version>_amd64.deb` | installation native via `apt install ./bountydesk_<version>_amd64.deb` |
+| Windows | `dist/Venari-Setup-<version>.exe` (NSIS) | dossier d'installation au choix, raccourcis bureau et menu démarrer, désinstallation propre |
+| Linux | `dist/venari-<version>.AppImage` | auto-portable : `chmod +x` puis lancer, aucun privilège requis |
+| Linux | `dist/venari_<version>_amd64.deb` | installation native via `apt install ./venari_<version>_amd64.deb` |
 
 `<version>` est la version déclarée dans `package.json` (0.2.0 au moment d'écrire).
 
@@ -55,7 +55,7 @@ node node_modules/electron/install.js
 | `npm run typecheck` | typecheck TypeScript (main + renderer) |
 | `npm run build` | build `out/` (main, preload, renderer) |
 | `npm run pack:check` | tests + typecheck + build, **sans** empaquetage — la porte à utiliser en CI et sur les deux plateformes |
-| `npm run dist:win` | `pack:check` + installeur NSIS → `dist/BountyDesk-Setup-<version>.exe` |
+| `npm run dist:win` | `pack:check` + installeur NSIS → `dist/Venari-Setup-<version>.exe` |
 | `npm run dist:linux` | `pack:check` + AppImage et deb → `dist/` |
 | `npm run dist:all` | les deux plateformes (à lancer sur chaque OS : un AppImage ne se cross-build pas de façon fiable) |
 | `npm run dist` | alias de `dist:win` (compatibilité) |

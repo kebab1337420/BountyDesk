@@ -1,5 +1,5 @@
 appId: com.bountydesk.app
-productName: BountyDesk
+productName: Venari
 copyright: Copyright © 2026 whitehat
 
 directories:
@@ -28,14 +28,14 @@ linux:
         - x64
   category: Development
   synopsis: Bureau du chercheur Intigriti
-  description: BountyDesk - centralise vos programmes de bug bounty, vos scans de securite et vos agents IA.
+  description: Venari - centralise vos programmes de bug bounty, vos scans de securite et vos agents IA.
   desktop:
     entry:
-      Name: BountyDesk
+      Name: Venari
       Comment: Bureau du chercheur Intigriti
       Categories: Development;Security;
-      StartupWMClass: BountyDesk
-      MimeType: x-scheme-handler/bountydesk;
+      StartupWMClass: Venari
+      MimeType: x-scheme-handler/venari;
 
 nsis:
   oneClick: false
@@ -43,9 +43,9 @@ nsis:
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
-  shortcutName: BountyDesk
-  uninstallDisplayName: BountyDesk
-  artifactName: BountyDesk-Setup-${version}.${ext}
+  shortcutName: Venari
+  uninstallDisplayName: Venari
+  artifactName: Venari-Setup-${version}.${ext}
   include: build/installer.nsh
 
 npmRebuild: true

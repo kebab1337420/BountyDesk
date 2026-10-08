@@ -291,10 +291,10 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           # Wildcard : le nom porte la version de package.json, qui change a chaque release.
-          $setup = (Resolve-Path 'dist\BountyDesk-Setup-*.exe' | Select-Object -First 1).Path
+          $setup = (Resolve-Path 'dist\Venari-Setup-*.exe' | Select-Object -First 1).Path
           $p = Start-Process -FilePath $setup -ArgumentList '/S' -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "installateur sorti en $($p.ExitCode)" }
-          $exe = Join-Path $env:LOCALAPPDATA 'Programs\BountyDesk\BountyDesk.exe'
+          $exe = Join-Path $env:LOCALAPPDATA 'Programs\Venari\Venari.exe'
           if (-not (Test-Path $exe)) { throw "executable absent apres installation : $exe" }
           "installee : $exe"
 
@@ -302,7 +302,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $exe = Join-Path $env:LOCALAPPDATA 'Programs\BountyDesk\BountyDesk.exe'
+          $exe = Join-Path $env:LOCALAPPDATA 'Programs\Venari\Venari.exe'
           $proc = Start-Process -FilePath $exe -PassThru
           Start-Sleep -Seconds 25
           if ($proc.HasExited) { throw "l'app a quitte (code $($proc.ExitCode))" }

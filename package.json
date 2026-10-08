@@ -1,7 +1,7 @@
 {
   "name": "bountydesk",
   "version": "0.3.0",
-  "description": "BountyDesk - bureau du chercheur Intigriti",
+  "description": "Venari - bureau du chercheur Intigriti",
   "main": "./out/main/index.js",
   "author": "whitehat <kebab1337420@users.noreply.github.com>",
   "license": "UNLICENSED",
@@ -44,7 +44,7 @@
     "vite": "^7.3.6",
     "vitest": "^5.0.1"
   },
-  "desktopName": "BountyDesk",
+  "desktopName": "Venari",
   "allowScripts": {
     "esbuild@0.25.12": true,
     "esbuild@0.28.2": true
