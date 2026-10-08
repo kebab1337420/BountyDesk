@@ -2,7 +2,7 @@
 
 > **Compatible [Boite](https://github.com/beboite/boite)** : Venari est pensé pour le fonctionner aux côtés de Boite — coordination d'agents, threads par projet, previews et navigateur intégrés pour valider vos finds.
 
-Application desktop Windows et Linux pour chasser sur la plateforme de bug bounty **Intigriti** : catalogue de programmes, favoris/groups/tags/notes locaux, veille sur le scope, scans de profondeur low/med/high, catalogue de **187 outils** de pen-test installables, et un serveur MCP local pour piloter le tout depuis une IA (Claude, opencode…).
+Application desktop Windows et Linux pour chasser sur la plateforme de bug bounty **Intigriti** : catalogue de programmes, favoris/groups/tags/notes locaux, veille sur le scope, scans de profondeur low/med/high, catalogue de **144 outils** de pen-test installables, et un serveur MCP local pour piloter le tout depuis une IA (Claude, opencode…).
 
 **Venari est un outil de lecture/assistance. Il ne soumet jamais de rapport automatiquement, et aucun scan n'est lancé sans confirmation explicite des règles d'engagement.**
 
@@ -118,13 +118,13 @@ Le port MCP n'est volontairement pas vérifié par les jobs de smoke test : le s
 
 ### Outils
 
-Le catalogue compte **187 entrées** réparties en six catégories (`recon` 65, `enumer` 9, `fuzz` 14, `network` 42, `utility` 55, `ai` 2) :
+Le catalogue compte **144 entrées** réparties en six catégories (`recon` 65, `enumer` 9, `fuzz` 14, `network` 16, `utility` 38, `ai` 2) :
 
 | Source | Nb | Installation |
 | --- | --- | --- |
 | `winget` | 24 | `winget install` (Windows) ; sous Linux, détection d'abord, puis `apt` via `pkexec` quand un paquet Debian est connu |
 | `github` | 43 | asset de release téléchargé, extrait, rendu exécutable, copié dans le dossier outils |
-| `git` | 112 | `git clone` sécurisé (frameworks, wordlists, outils Python/Go) — un bouton **Guide** ouvre la doc, rien n'est compilé ni exécuté automatiquement |
+| `git` | 69 | `git clone` sécurisé (frameworks, wordlists, outils Python/Go) — un bouton **Guide** ouvre la doc, rien n'est compilé ni exécuté automatiquement |
 | `go` | 5 | `go install <module>@latest` avec `GOBIN` dirigé vers le dossier de l'outil |
 | `pip` | 4 | `uv venv` + `uv pip install` dans un venv isolé par outil (uv est lui-même au catalogue) |
 

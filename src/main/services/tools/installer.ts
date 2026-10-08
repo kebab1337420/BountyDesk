@@ -334,7 +334,7 @@ export async function isInstalled(tool: ToolDefinition): Promise<boolean> {
     const installed = await installedWingetIds()
     if (installed) {
       // winget affiche `ARP\...` dans la colonne ID pour les apps installees
-      // hors winget (Firefox, Discord) : leur id n'y figure pas, leur nom si.
+      // hors winget (Burp Suite installé à la main) : leur id n'y figure pas, leur nom si.
       // On teste donc l'id, l'id winget, la commande et le nom.
       const keys = [tool.wingetId, tool.id, tool.detectCmd, tool.exeName, tool.name]
         .filter((k): k is string => Boolean(k))

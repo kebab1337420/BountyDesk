@@ -6,35 +6,24 @@ const path = require('path')
 
 const FILE = path.join(__dirname, '..', 'src', 'main', 'services', 'tools', 'catalog.ts')
 
+// Passe 2 : hors web bug bounty — post-exploitation AD/Windows, DFIR/maliciel,
+// cracking, RE, capture/CNF réseau profonde, scan internet-wide.
 const REMOVE = new Set([
-  // archives / CLI generalistes
-  '7zip', 'bat', 'fd', 'fzf', 'delta', 'eza', 'hyperfine',
-  // utilitaires Windows
-  'everything', 'powertoys', 'autohotkey', 'windirstat', 'sumatrapdf', 'rufus', 'ventoy',
-  'crystaldiskinfo', 'crystaldiskmark',
-  // Sysinternals (triage/malware, pas web bounty)
-  'procexp', 'procmon', 'autoruns', 'handle', 'sigcheck', 'rammap',
-  // terminaux / editeurs / IDE
-  'terminal', 'alacritty', 'vscode', 'vscodium', 'neovim', 'notepadplusplus',
-  'intellij-idea', 'pycharm', 'rider',
-  // runtimes / toolchains en double (python 3.12, go, node, git, ripgrep, jq, yq restent)
-  'python311', 'python310', 'python313', 'deno', 'bun', 'pnpm', 'yarn', 'volta',
-  'rustup', 'php', 'ruby', 'openjdk21', 'temurin21', 'zulu21', 'openjdk17', 'temurin8',
-  'zulu17', 'dotnet-sdk8', 'dotnet-sdk9', 'dotnet-desktop8', 'dotnet6', 'cmake', 'ninja',
-  'vs-buildtools',
-  // git GUI / SSH generalistes
-  'gh', 'github-desktop', 'tortoisegit', 'putty', 'termius',
-  // BDD / conteneurs / IaC / cloud
-  'sqlitesuite', 'redis', 'docker-desktop', 'wsl', 'debian', 'virtualbox', 'helm',
-  'kubectl', 'terraform', 'packer', 'vagrant', 'consul', 'nomad', 'vault',
-  'awscli', 'azurecli', 'gcloud',
-  // navigateurs
-  'browser-tor', 'firefox', 'chrome', 'brave', 'librewolf',
-  // VPN / remote desktop
-  'openvpn', 'wireguard', 'warp', 'tailscale', 'anydesk', 'teamviewer', 'vncviewer',
-  // bureautique / multimedia / messageries
-  'heidisql', 'drawio', 'obsidian', 'bitwarden', 'obs-studio', 'ffmpeg', 'thunderbird',
-  'discord', 'slack', 'zoom'
+  // post-exploitation AD / Windows
+  'impacket', 'responder', 'evil-winrm', 'nishang', 'empire', 'powersploit', 'seatbelt',
+  'rubeus', 'bloodhound', 'sharphound', 'mimikatz', 'petitpotam', 'printspoofer',
+  'unicorn', 'sliver', 'velociraptor', 'metasploit',
+  // DFIR / maliciel / threat intel
+  'volatility', 'volatility3', 'timesketch', 'assemblyline', 'yara', 'clamav', 'capa',
+  'ptf', 'capev2', 'misp', 'opencti', 'yeti', 'mitre-attack', 'mitre-cti',
+  // cracking
+  'hashcat', 'john',
+  // reverse engineering
+  'radare2',
+  // capture / analyse de trafic profonde
+  'tcpdump', 'ngrep', 'zeek', 'suricata', 'arkime', 'ntopng', 'scapy',
+  // scan internet-wide (hors scope de programme)
+  'zmap', 'zgrab2'
 ])
 
 const lines = fs.readFileSync(FILE, 'utf8').split(/\r?\n/)
